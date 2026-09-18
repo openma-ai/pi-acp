@@ -1,0 +1,73 @@
+{
+  "name": "@openma/pi-acp",
+  "version": "0.1.0",
+  "description": "Full-featured Agent Client Protocol (ACP) adapter for the pi coding agent, built in-process on the pi SDK.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openma-ai/pi-acp.git"
+  },
+  "homepage": "https://github.com/openma-ai/pi-acp#readme",
+  "bugs": {
+    "url": "https://github.com/openma-ai/pi-acp/issues"
+  },
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "pi",
+    "pi-coding-agent",
+    "zed",
+    "backchat",
+    "adapter"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "main": "dist/index.js",
+  "bin": {
+    "openma-pi-acp": "dist/bin.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "docs/metadata.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "dev": "node --import tsx src/bin.ts",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "typebox": "^1.3.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "prettier": "^3.8.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "zod": "^4.6.5"
+  }
+}
