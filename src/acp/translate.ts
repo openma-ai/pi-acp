@@ -17,6 +17,7 @@ import type {
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
 import { piMeta } from "./meta.ts";
+import { customEntryUpdates, customMessageUpdate } from "./custom-entries.ts";
 import {
   absoluteToolPath,
   asRecord,
@@ -52,6 +53,8 @@ export interface ProjectionOptions {
   terminalOutput?: TerminalOutputMode | boolean;
   /** Snapshot/read files for structured `diff` content on edit/write. */
   files?: FileAccess;
+  /** Owning extension path for extension-registered tools (attribution on `tool_call`). */
+  toolOwner?: (toolName: string) => string | undefined;
 }
 
 export interface FileChange {
@@ -120,6 +123,7 @@ export class SessionProjection {
   private readonly cwd: string;
   private readonly terminalMode: TerminalOutputMode;
   private readonly files: FileAccess | undefined;
+  private toolOwner: (toolName: string) => string | undefined;
   private readonly toolCalls = new Map<string, OpenToolCall>();
   private window: PromptWindow = emptyWindow();
   private contextWindow: number | undefined;
@@ -132,6 +136,12 @@ export class SessionProjection {
     this.terminalMode =
       mode === true ? "terminal_output" : mode === false || mode === undefined ? "none" : mode;
     this.files = options.files;
+    this.toolOwner = options.toolOwner ?? (() => undefined);
+  }
+
+  /** Replace the tool → extension lookup (after `reload`, extensions may change). */
+  setToolOwner(lookup: (toolName: string) => string | undefined): void {
+    this.toolOwner = lookup;
   }
 
   private terminalMeta(id: string, delta: string): Record<string, unknown> {
@@ -289,6 +299,8 @@ export class SessionProjection {
             }),
           },
         ];
+      case "entry_appended":
+        return customEntryUpdates(event.entry);
       case "session_info_changed":
         return [
           {
@@ -373,6 +385,17 @@ export class SessionProjection {
 
   private onMessageEnd(message: unknown): SessionUpdate[] {
     const record = asRecord(message);
+    if (record.role === "custom" && typeof record["customType"] === "string") {
+      // Extension `sendMessage` delivered during a turn (steer/followUp/queued).
+      return [
+        customMessageUpdate({
+          customType: record["customType"],
+          content: record["content"],
+          display: record["display"] === true,
+          details: record["details"],
+        }),
+      ];
+    }
     if (record.role !== "assistant") return [];
     const assistant = message as AssistantMessage;
     this.window.lastAssistant = assistant;
@@ -430,6 +453,11 @@ export class SessionProjection {
 
   private toolCallCreated(id: string, state: OpenToolCall): SessionUpdate {
     const terminal = this.terminalContent(id, state);
+    const owner = this.toolOwner(state.name);
+    const meta = {
+      ...(terminal?._meta ?? {}),
+      ...(owner !== undefined ? piMeta({ extension: owner }) : {}),
+    };
     return {
       sessionUpdate: "tool_call",
       toolCallId: id,
@@ -439,7 +467,8 @@ export class SessionProjection {
       status: state.status,
       rawInput: state.args,
       ...(state.facts.locations.length > 0 ? { locations: state.facts.locations } : {}),
-      ...(terminal ?? {}),
+      ...(terminal !== undefined ? { content: terminal.content } : {}),
+      ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
     };
   }
 

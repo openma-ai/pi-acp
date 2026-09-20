@@ -43,6 +43,7 @@ import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
 import { createDelegatedTools, type DelegationCapabilities } from "./delegation.ts";
 import { authRequired, classifyFailure, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
 import { createTappedEventBus, describeExtensionEvent, type TappedEventBus } from "./extension-events.ts";
+import { extensionInventory, toolOwnerLookup, type ExtensionInventoryEntry } from "./extension-inventory.ts";
 import { buildReplay } from "./history.ts";
 import { mountMcpServers, type McpMount } from "./mcp.ts";
 import { piMeta } from "./meta.ts";
@@ -377,7 +378,13 @@ export class PiAcpSession {
       },
     });
     this.projection.setContextWindow(session.model?.contextWindow);
+    this.projection.setToolOwner(toolOwnerLookup(session));
     this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event));
+  }
+
+  /** Loaded extensions with the tools/commands/custom types they own. */
+  extensions(): ExtensionInventoryEntry[] {
+    return extensionInventory(this.session);
   }
 
   private onSessionEvent(event: AgentSessionEvent): void {

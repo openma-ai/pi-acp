@@ -439,7 +439,11 @@ export class PiAcpAgent implements AcpAgent {
       sessionId: session.sessionId,
       modes: session.modes(),
       configOptions: session.configOptions(),
-      _meta: piMeta({ sessionFile: session.session.sessionFile ?? null, diagnostics: session.diagnostics }),
+      _meta: piMeta({
+        sessionFile: session.session.sessionFile ?? null,
+        diagnostics: session.diagnostics,
+        extensions: session.extensions(),
+      }),
     };
   }
 
@@ -464,7 +468,11 @@ export class PiAcpAgent implements AcpAgent {
     return {
       modes: session.modes(),
       configOptions: session.configOptions(),
-      _meta: piMeta({ sessionFile: stored.path, diagnostics: session.diagnostics }),
+      _meta: piMeta({
+        sessionFile: stored.path,
+        diagnostics: session.diagnostics,
+        extensions: session.extensions(),
+      }),
     };
   }
 
@@ -488,7 +496,11 @@ export class PiAcpAgent implements AcpAgent {
     return {
       modes: session.modes(),
       configOptions: session.configOptions(),
-      _meta: piMeta({ sessionFile: stored.path, diagnostics: session.diagnostics }),
+      _meta: piMeta({
+        sessionFile: stored.path,
+        diagnostics: session.diagnostics,
+        extensions: session.extensions(),
+      }),
     };
   }
 
@@ -515,7 +527,11 @@ export class PiAcpAgent implements AcpAgent {
       sessionId: session.sessionId,
       modes: session.modes(),
       configOptions: session.configOptions(),
-      _meta: piMeta({ sessionFile: session.session.sessionFile ?? null, forkedFrom: params.sessionId }),
+      _meta: piMeta({
+        sessionFile: session.session.sessionFile ?? null,
+        forkedFrom: params.sessionId,
+        extensions: session.extensions(),
+      }),
     };
   }
 

@@ -84,6 +84,10 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `oauth:<provider>` methods that run pi's browser/device-code OAuth flows through ACP
   elicitation (Anthropic, OpenAI Codex, GitHub Copilot, …), `_auth/status_update` pushes, and
   `logout`.
+- **Extension attribution** — session responses list every loaded extension with the tools,
+  commands, and custom entry types it owns; `tool_call`s carry `_meta.pi.extension`; extension
+  `sendMessage` / `appendEntry` payloads are forwarded whole. Clients adapt third-party
+  extensions (pi-subagents, pi-goal, …) on their side; the adapter never interprets them.
 - **Extension events** — every `pi.events.emit` from any extension (pi-subagents, pi-goal, …) is
   forwarded as `extension_event` metadata with the payload plus two marked inferences from
   naming conventions: a lifecycle `phase` and a `correlationId`. Clients get a work-item

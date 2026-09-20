@@ -71,10 +71,30 @@ logged or persisted as transcript content.
 ```json
 {
   "_meta": {
-    "pi": { "sessionFile": "/Users/me/.pi/agent/sessions/…/….jsonl", "diagnostics": ["warning: …"] }
+    "pi": {
+      "sessionFile": "/Users/me/.pi/agent/sessions/…/….jsonl",
+      "diagnostics": ["warning: …"],
+      "extensions": [
+        {
+          "path": "/Users/me/.pi/agent/npm/node_modules/pi-subagents/index.ts",
+          "source": "npm:pi-subagents",
+          "scope": "user",
+          "origin": "package",
+          "tools": ["subagent"],
+          "commands": ["subagents", "run"],
+          "customTypes": ["subagent:result"]
+        }
+      ]
+    }
   }
 }
 ```
+
+`extensions` is the inventory clients use to route per-extension adapters:
+`tools` map `tool_call.name` (also attributed live via `tool_call._meta.pi.extension`),
+`commands` map slash commands, `customTypes` map `custom_message` /
+`custom_entry`. Event-bus traffic (`extension_event`) has no sender identity in
+pi; correlate by channel namespace.
 
 `diagnostics` lists non-fatal startup problems (extension load errors, untrusted
 project resources, unavailable MCP servers).
@@ -113,7 +133,8 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
 | `editor_text`     | `text` — an extension asked to fill the editor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `extension_error` | `extensionPath`, `hook`, `error`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `prompt_usage`    | `usage` (ACP `Usage`) — aggregate restored by history replay                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `custom_message`  | `customType`, `display`, `preview` — a pi custom message entry                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `custom_message`  | `customType`, `display`, `text`, `content` (full, JSON-safe), `details?` (full, JSON-safe), `truncated`, `entryId?` — an extension `pi.sendMessage(...)`, live and on replay                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `custom_entry`    | `customType`, `data?` (JSON-safe), `truncated`, `entryId?` — an extension `pi.appendEntry(...)`, live and on replay                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `branch_summary`  | `fromId`, `summary`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `file_changes`    | `files: [{ path, kind: "add" \| "update", added, removed }]` — files edited during the turn, emitted once when the turn settles                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `failure`         | `kind: "auth_required" \| "rate_limited" \| "context_overflow" \| "network" \| "provider_error" \| "cancelled" \| "unknown"`, `message` — emitted before a failed `session/prompt` rejects; the error's `data.pi.failure` carries the same kind                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -127,6 +148,12 @@ A retry start also emits a visible italic `agent_message_chunk` with
 
 `compaction_update` carries `_meta.pi.reason` (`manual` / `threshold` /
 `overflow`) and `tokensBefore` on completion.
+
+### Tool attribution
+
+`tool_call` (initial update) carries `_meta.pi.extension: <path>` when the tool
+was registered by a pi extension. Built-in tools, MCP tools (`mcp__*`), and
+client-delegated tools carry no attribution.
 
 ### Diff metadata
 

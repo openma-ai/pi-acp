@@ -10,6 +10,7 @@ import type { ContentBlock, ToolCallContent, Usage } from "@agentclientprotocol/
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { piMeta } from "./meta.ts";
+import { customEntryUpdates } from "./custom-entries.ts";
 import {
   asRecord,
   classifyToolCall,
@@ -187,18 +188,7 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
             rawOutput: { output: bash.output, exitCode: bash.exitCode, cancelled: bash.cancelled },
           });
         } else if (message.role === "custom") {
-          const custom = entry.message as { customType: string; display: boolean; content: unknown };
-          const preview =
-            typeof custom.content === "string" ? custom.content : toolResultText({ content: custom.content });
-          updates.push({
-            sessionUpdate: "session_info_update",
-            _meta: piMeta({
-              event: "custom_message",
-              customType: custom.customType,
-              display: custom.display,
-              preview: Array.from(preview).slice(0, 160).join(""),
-            }),
-          });
+          updates.push(...customEntryUpdates(entry));
         }
         break;
       }
@@ -217,20 +207,10 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
           _meta: piMeta({ event: "branch_summary", fromId: entry.fromId, summary: entry.summary }),
         });
         break;
-      case "custom_message": {
-        const preview =
-          typeof entry.content === "string" ? entry.content : toolResultText({ content: entry.content });
-        updates.push({
-          sessionUpdate: "session_info_update",
-          _meta: piMeta({
-            event: "custom_message",
-            customType: entry.customType,
-            display: entry.display,
-            preview: Array.from(preview).slice(0, 160).join(""),
-          }),
-        });
+      case "custom_message":
+      case "custom":
+        updates.push(...customEntryUpdates(entry));
         break;
-      }
       default:
         break;
     }
