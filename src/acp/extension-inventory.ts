@@ -27,7 +27,7 @@ export function extensionInventory(session: AgentSession): ExtensionInventoryEnt
   const out: ExtensionInventoryEntry[] = [];
   for (const extension of session.resourceLoader.getExtensions().extensions) {
     if (extension.hidden === true) continue;
-    if (extension.path === ADAPTER_EXTENSION_NAME) continue; // the adapter's own permission gate
+    if (extension.path === `<inline:${ADAPTER_EXTENSION_NAME}>`) continue; // the adapter's own permission gate
     const customTypes = new Set<string>([
       ...extension.messageRenderers.keys(),
       ...(extension.entryRenderers?.keys() ?? []),
