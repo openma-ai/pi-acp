@@ -67,6 +67,7 @@ describe("extension attribution", () => {
       customTypes: expect.arrayContaining(["tracker:job", "tracker:marker"]),
     });
     expect(typeof tracker?.["path"]).toBe("string");
+    expect(extensions.some((e) => e["path"] === "openma-acp-permissions")).toBe(false);
   });
 
   it("attributes tool calls to their extension and forwards custom messages with details", async () => {

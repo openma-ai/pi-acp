@@ -43,7 +43,12 @@ import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
 import { createDelegatedTools, type DelegationCapabilities } from "./delegation.ts";
 import { authRequired, classifyFailure, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
 import { createTappedEventBus, describeExtensionEvent, type TappedEventBus } from "./extension-events.ts";
-import { extensionInventory, toolOwnerLookup, type ExtensionInventoryEntry } from "./extension-inventory.ts";
+import {
+  ADAPTER_EXTENSION_NAME,
+  extensionInventory,
+  toolOwnerLookup,
+  type ExtensionInventoryEntry,
+} from "./extension-inventory.ts";
 import { buildReplay } from "./history.ts";
 import { mountMcpServers, type McpMount } from "./mcp.ts";
 import { piMeta } from "./meta.ts";
@@ -202,7 +207,7 @@ export class PiAcpSession {
     this.mcpDiagnostics = mcp.diagnostics;
 
     const gate: InlineExtension = {
-      name: "openma-acp-permissions",
+      name: ADAPTER_EXTENSION_NAME,
       factory: (pi: ExtensionAPI) => {
         pi.on("tool_call", (event) => this.policy.gate(event, (call) => this.requestToolPermission(call)));
       },

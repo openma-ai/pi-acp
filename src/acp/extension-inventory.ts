@@ -7,6 +7,9 @@
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
+/** Name of the inline extension the adapter installs for permission gating. */
+export const ADAPTER_EXTENSION_NAME = "openma-acp-permissions";
+
 export interface ExtensionInventoryEntry {
   /** Extension path as pi reports it (package entry or file). */
   path: string;
@@ -24,6 +27,7 @@ export function extensionInventory(session: AgentSession): ExtensionInventoryEnt
   const out: ExtensionInventoryEntry[] = [];
   for (const extension of session.resourceLoader.getExtensions().extensions) {
     if (extension.hidden === true) continue;
+    if (extension.path === ADAPTER_EXTENSION_NAME) continue; // the adapter's own permission gate
     const customTypes = new Set<string>([
       ...extension.messageRenderers.keys(),
       ...(extension.entryRenderers?.keys() ?? []),
