@@ -219,17 +219,15 @@ complete on its own.
 
 ## Known third-party extensions
 
-pi lacks a plan, plan-mode, and multi-root primitive. Rather than inventing
-them, the adapter recognises the largest extension that provides each one
+pi lacks a multi-root primitive. Rather than inventing one, the adapter
+recognises the extension that provides it
 (by package identity in settings and in the loaded-extension inventory) and
 maps that extension's own wire shapes onto ACP. Absent the extension, the ACP
 feature is absent.
 
-| Extension                                                                        | ACP surface                                                                                                                                                                                                                                                                                                            |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@juicesharp/rpiv-todo`](https://pi.dev/packages/@juicesharp/rpiv-todo)         | Every `todo` tool result's `details.tasks` snapshot → `plan` (deleted tasks omitted; `activeForm` appended to an in-progress subject). Replayed on `session/load`.                                                                                                                                                     |
-| [`pi-add-dir`](https://pi.dev/packages/pi-add-dir)                               | `sessionCapabilities.additionalDirectories`; requested roots run `/add-dir <path>`; state read from its `add-dir:state` entry.                                                                                                                                                                                         |
-| [`@plannotator/pi-extension`](https://pi.dev/packages/@plannotator/pi-extension) | Config option `collaboration_mode` (`default` \| `plan`, Codex ids) driven through `plannotator:request` `plan-mode`; `/plan` command with a `setConfigOption` commandAction; the executing plan's checkbox checklist → `plan`, refreshed after `plannotator_submit_plan` / `plannotator_mark_done` and state entries. |
+| Extension                                          | ACP surface                                                                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [`pi-add-dir`](https://pi.dev/packages/pi-add-dir) | `sessionCapabilities.additionalDirectories`; requested roots run `/add-dir <path>`; state read from its `add-dir:state` entry. |
 
 ## Extension methods
 

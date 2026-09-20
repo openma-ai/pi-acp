@@ -10,7 +10,6 @@ import type {
   AgentSideConnection,
   AvailableCommand,
   McpServer,
-  PlanEntry,
   SessionConfigOption,
   StopReason,
   ToolCallUpdate,
@@ -70,16 +69,6 @@ import {
 import { createAcpUiContext } from "./ui-context.ts";
 import { detectFromInventory, type KnownExtensionId } from "./extensions/registry.ts";
 import { applyAdditionalDirectories, readAddedDirectories } from "./extensions/pi-add-dir.ts";
-import { planFromRpivTodo } from "./extensions/rpiv-todo.ts";
-import {
-  collaborationModeOption,
-  PLAN_COMMAND_ENTRY,
-  planFromPlannotator,
-  plannotatorPlanChanged,
-  readPlannotatorState,
-  requestPlanMode,
-  type PlannotatorPhase,
-} from "./extensions/plannotator.ts";
 
 export interface ClientFeatures {
   /** Display-terminal `_meta` extension the client renders (`_meta.terminal_output[_delta]`). */
@@ -155,7 +144,6 @@ export class PiAcpSession {
   private eventBus: TappedEventBus | undefined;
   private known = new Set<KnownExtensionId>();
   private requestedDirectories: readonly string[] | undefined;
-  private lastPlanJson: string | undefined;
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
@@ -441,58 +429,7 @@ export class PiAcpSession {
 
   private onSessionEvent(event: AgentSessionEvent): void {
     for (const update of this.projection.onEvent(event)) this.emit(update);
-    this.projectKnownExtensions(event);
     if (event.type === "agent_settled") this.settle();
-  }
-
-  /** First-class ACP surfaces backed by known third-party extensions. */
-  private projectKnownExtensions(event: AgentSessionEvent): void {
-    if (this.known.has("rpiv-todo") && event.type === "tool_execution_end") {
-      const details = (event.result as { details?: unknown } | undefined)?.details;
-      const entries = planFromRpivTodo(event.toolName, details);
-      if (entries !== undefined) this.emitPlan(entries);
-    }
-    if (this.known.has("plannotator")) {
-      const facts =
-        event.type === "tool_execution_end"
-          ? { toolName: event.toolName }
-          : event.type === "entry_appended"
-            ? { customType: (event.entry as { customType?: string }).customType }
-            : event.type === "message_end"
-              ? { customType: (event.message as { customType?: string }).customType }
-              : undefined;
-      if (facts !== undefined && plannotatorPlanChanged(facts)) {
-        const entries = planFromPlannotator(this.session, this.cwd);
-        if (entries !== undefined) this.emitPlan(entries);
-        if (facts.customType !== undefined) this.publishConfigOptions();
-      }
-    }
-  }
-
-  private emitPlan(entries: ReturnType<typeof planFromRpivTodo> & object): void {
-    const json = JSON.stringify(entries);
-    if (json === this.lastPlanJson) return;
-    this.lastPlanJson = json;
-    this.emit({ sessionUpdate: "plan", entries });
-  }
-
-  /** Current Plannotator phase from its persisted state (undefined when not installed). */
-  plannotatorPhase(): PlannotatorPhase | undefined {
-    if (!this.known.has("plannotator")) return undefined;
-    return readPlannotatorState(this.session)?.phase ?? "idle";
-  }
-
-  /** Drive Plannotator plan mode through its event API; returns the resulting phase. */
-  async setCollaborationMode(value: string): Promise<PlannotatorPhase> {
-    if (!this.known.has("plannotator"))
-      throw invalidParams("collaboration_mode requires @plannotator/pi-extension");
-    const mode = value === "plan" ? "enter" : value === "default" ? "exit" : undefined;
-    if (mode === undefined) throw invalidParams(`unknown collaboration mode: ${value}`);
-    try {
-      return await requestPlanMode((channel, data) => this.eventBus?.inject(channel, data), mode);
-    } catch (error: unknown) {
-      throw internalError(`plan mode change failed: ${errorMessage(error)}`);
-    }
   }
 
   private onExtensionEvent(channel: string, data: unknown): void {
@@ -534,12 +471,9 @@ export class PiAcpSession {
   // ------------------------------------------------------------------ //
 
   configOptions(): SessionConfigOption[] {
-    const options = buildConfigOptions(this.session, this.policy.mode, {
+    return buildConfigOptions(this.session, this.policy.mode, {
       booleanOptions: this.features.booleanConfigOptions,
     });
-    const phase = this.plannotatorPhase();
-    if (phase !== undefined) options.splice(1, 0, collaborationModeOption(phase));
-    return options;
   }
 
   modes(): ReturnType<typeof modeState> {
@@ -547,13 +481,9 @@ export class PiAcpSession {
   }
 
   availableCommands(): AvailableCommand[] {
-    const commands = availableCommandsFor(this.session, {
+    return availableCommandsFor(this.session, {
       enableSkillCommands: this.session.settingsManager.getEnableSkillCommands(),
     });
-    if (this.known.has("plannotator") && !commands.some((c) => c.name === PLAN_COMMAND_ENTRY.name)) {
-      commands.unshift(PLAN_COMMAND_ENTRY);
-    }
-    return commands;
   }
 
   publishCommands(): void {
@@ -581,28 +511,6 @@ export class PiAcpSession {
     if (title !== undefined) {
       this.emit({ sessionUpdate: "session_info_update", title, updatedAt: new Date().toISOString() });
     }
-    const plan = this.replayKnownPlan();
-    if (plan !== undefined) this.emitPlan(plan);
-  }
-
-  /** Last plan snapshot an installed extension persisted on the branch. */
-  private replayKnownPlan(): PlanEntry[] | undefined {
-    if (this.known.has("plannotator")) {
-      const entries = planFromPlannotator(this.session, this.cwd);
-      if (entries !== undefined) return entries;
-    }
-    if (this.known.has("rpiv-todo")) {
-      let latest: PlanEntry[] | undefined;
-      for (const entry of this.session.sessionManager.getBranch()) {
-        if (entry.type !== "message") continue;
-        const message = entry.message as { role?: string; toolName?: string; details?: unknown };
-        if (message.role !== "toolResult") continue;
-        const entries = planFromRpivTodo(message.toolName ?? "", message.details);
-        if (entries !== undefined) latest = entries;
-      }
-      return latest;
-    }
-    return undefined;
   }
 
   setMode(mode: PermissionMode): void {

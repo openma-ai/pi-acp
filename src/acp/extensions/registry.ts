@@ -1,9 +1,9 @@
 /**
  * Third-party pi extensions the adapter knows how to surface as first-class
- * ACP features. pi has no plan or multi-root primitive; when the user has
- * installed the extension that provides one, the adapter maps that extension's
- * own wire shapes (tool results, session entries, commands) onto ACP. Nothing
- * here is invented: absent the extension, the ACP feature is absent too.
+ * ACP features. pi has no multi-root primitive; when the user has installed
+ * the extension that provides one, the adapter maps that extension's own wire
+ * shapes (commands, session entries) onto ACP. Nothing here is invented:
+ * absent the extension, the ACP feature is absent too.
  *
  * Detection is by package identity (settings `packages` / `extensions` at
  * `initialize`, the loaded-extension inventory once a session exists).
@@ -13,7 +13,7 @@ import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { errorMessage, logDebug } from "../../log.ts";
 import type { ExtensionInventoryEntry } from "../extension-inventory.ts";
 
-export type KnownExtensionId = "rpiv-todo" | "pi-add-dir" | "plannotator";
+export type KnownExtensionId = "pi-add-dir";
 
 export interface KnownExtension {
   id: KnownExtensionId;
@@ -24,30 +24,16 @@ export interface KnownExtension {
   /** Tool the extension registers; a second, structural signal. */
   tool: string;
   /** What the adapter gains from it. */
-  provides: "plan" | "additionalDirectories" | "planMode";
+  provides: "additionalDirectories";
 }
 
 export const KNOWN_EXTENSIONS: readonly KnownExtension[] = [
-  {
-    id: "rpiv-todo",
-    package: "@juicesharp/rpiv-todo",
-    markers: ["rpiv-todo"],
-    tool: "todo",
-    provides: "plan",
-  },
   {
     id: "pi-add-dir",
     package: "pi-add-dir",
     markers: ["pi-add-dir"],
     tool: "add_directory",
     provides: "additionalDirectories",
-  },
-  {
-    id: "plannotator",
-    package: "@plannotator/pi-extension",
-    markers: ["plannotator"],
-    tool: "plannotator_submit_plan",
-    provides: "planMode",
   },
 ];
 

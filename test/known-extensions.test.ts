@@ -1,14 +1,13 @@
 /**
- * E2E: known third-party extensions surfaced as first-class ACP features.
- * Fixtures reproduce each extension's documented wire shapes (tool results,
- * session entries, event API) so the adapter is tested against the contract
- * it adapts, without installing the packages.
+ * E2E: pi-add-dir surfaced as ACP `additionalDirectories`. The fixture
+ * reproduces the extension's documented wire shape (command, state entry) so
+ * the adapter is tested against the contract it adapts, without installing it.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fauxAssistantMessage, fauxToolCall, Harness } from "./helpers/harness.ts";
+import { fauxAssistantMessage, Harness } from "./helpers/harness.ts";
 
 let harness: Harness | undefined;
 
@@ -16,25 +15,6 @@ afterEach(async () => {
   await harness?.close();
   harness = undefined;
 });
-
-/** @juicesharp/rpiv-todo: `todo` tool, full task snapshot in every result's details. */
-const RPIV_TODO = `
-import { Type } from "typebox";
-export default function (pi) {
-  let tasks = []; let nextId = 1;
-  pi.registerTool({
-    name: "todo", label: "Todo", description: "task list",
-    parameters: Type.Object({ action: Type.String(), subject: Type.Optional(Type.String()), id: Type.Optional(Type.Number()), status: Type.Optional(Type.String()), activeForm: Type.Optional(Type.String()) }),
-    async execute(_id, p) {
-      if (p.action === "create") tasks.push({ id: nextId++, subject: p.subject, status: "pending" });
-      if (p.action === "update") { const t = tasks.find((t) => t.id === p.id); if (t) { t.status = p.status; if (p.activeForm) t.activeForm = p.activeForm; } }
-      if (p.action === "delete") { const t = tasks.find((t) => t.id === p.id); if (t) t.status = "deleted"; }
-      // Like the real reducer, every result carries its own immutable snapshot.
-      return { content: [{ type: "text", text: "ok" }], details: { action: p.action, params: p, tasks: tasks.map((t) => ({ ...t })), nextId } };
-    },
-  });
-}
-`;
 
 /** pi-add-dir: `/add-dir <path>` persists `add-dir:state`; `add_directory` tool exists. */
 const PI_ADD_DIR = `
@@ -55,41 +35,6 @@ export default function (pi) {
 }
 `;
 
-/** @plannotator/pi-extension: phases via `plannotator:request`, state entries, submit/mark-done tools. */
-const PLANNOTATOR = `
-import { Type } from "typebox";
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-export default function (pi) {
-  let phase = "idle"; let lastSubmittedPath = null;
-  const persist = () => pi.appendEntry("plannotator", { phase, lastSubmittedPath });
-  pi.on("session_start", (_e, ctx) => {
-    for (const e of ctx.sessionManager.getBranch()) if (e.type === "custom" && e.customType === "plannotator") { phase = e.data.phase; lastSubmittedPath = e.data.lastSubmittedPath; }
-  });
-  pi.events.on("plannotator:request", async (req) => {
-    if (req.action !== "plan-mode") return;
-    const mode = req.payload?.mode ?? "toggle";
-    if (mode === "enter" && phase === "idle") { phase = "planning"; persist(); }
-    else if (mode === "exit" && phase !== "idle") { phase = "idle"; persist(); }
-    else if (mode === "toggle") { phase = phase === "idle" ? "planning" : "idle"; persist(); }
-    req.respond({ status: "handled", result: { phase } });
-  });
-  pi.registerTool({ name: "plannotator_submit_plan", description: "submit", parameters: Type.Object({ filePath: Type.String() }),
-    async execute(_id, p, _s, _u, ctx) {
-      lastSubmittedPath = p.filePath; phase = "executing";
-      pi.appendEntry("plannotator-execute", { lastSubmittedPath }); persist();
-      return { content: [{ type: "text", text: "approved" }], details: { approved: true } };
-    } });
-  pi.registerTool({ name: "plannotator_mark_done", description: "done", parameters: Type.Object({ step: Type.Number() }),
-    async execute(_id, p, _s, _u, ctx) {
-      const path = resolve(ctx.cwd, lastSubmittedPath); let n = 0;
-      writeFileSync(path, readFileSync(path, "utf8").replace(/^([-*] )\\[ \\]/gm, (m, b) => (++n === p.step ? b + "[x]" : m)));
-      persist();
-      return { content: [{ type: "text", text: "done" }], details: { completed: true, step: p.step } };
-    } });
-}
-`;
-
 function installExtension(h: Harness, file: string, source: string): string {
   const dir = join(h.agentDir, "extensions");
   mkdirSync(dir, { recursive: true });
@@ -97,68 +42,6 @@ function installExtension(h: Harness, file: string, source: string): string {
   writeFileSync(path, source);
   return path;
 }
-
-function plans(h: Harness, sessionId: string) {
-  return h.updatesFor(sessionId).filter((u) => u.sessionUpdate === "plan");
-}
-
-describe("rpiv-todo → plan", () => {
-  it("projects every todo snapshot as an ACP plan and replays the last one on load", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
-    installExtension(harness, "rpiv-todo.js", RPIV_TODO);
-    await harness.initialize();
-    const sessionId = await harness.newSession();
-    harness.respond(
-      fauxAssistantMessage([
-        fauxToolCall("todo", { action: "create", subject: "Research" }),
-        fauxToolCall("todo", { action: "create", subject: "Implement" }),
-      ]),
-      fauxAssistantMessage([
-        fauxToolCall("todo", { action: "update", id: 1, status: "in_progress", activeForm: "reading code" }),
-      ]),
-      fauxAssistantMessage([fauxToolCall("todo", { action: "delete", id: 2 })]),
-      fauxAssistantMessage("ok"),
-    );
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "plan it" }] });
-    const seen = plans(harness, sessionId).map((u) => (u.sessionUpdate === "plan" ? u.entries : []));
-    expect(seen).toEqual([
-      [{ content: "Research", status: "pending", priority: "medium" }],
-      [
-        { content: "Research", status: "pending", priority: "medium" },
-        { content: "Implement", status: "pending", priority: "medium" },
-      ],
-      [
-        { content: "Research — reading code", status: "in_progress", priority: "medium" },
-        { content: "Implement", status: "pending", priority: "medium" },
-      ],
-      [{ content: "Research — reading code", status: "in_progress", priority: "medium" }],
-    ]);
-
-    await harness.client.closeSession({ sessionId });
-    harness.notifications.length = 0;
-    await harness.client.loadSession({ sessionId, cwd: harness.workspace, mcpServers: [] });
-    await harness.settle();
-    expect(plans(harness, sessionId)).toEqual([
-      {
-        sessionUpdate: "plan",
-        entries: [{ content: "Research — reading code", status: "in_progress", priority: "medium" }],
-      },
-    ]);
-  });
-
-  it("does nothing for an unrelated tool named todo without the package", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
-    installExtension(harness, "my-notes.js", RPIV_TODO);
-    await harness.initialize();
-    const sessionId = await harness.newSession();
-    harness.respond(
-      fauxAssistantMessage([fauxToolCall("todo", { action: "create", subject: "x" })]),
-      fauxAssistantMessage("ok"),
-    );
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "go" }] });
-    expect(plans(harness, sessionId)).toEqual([]);
-  });
-});
 
 describe("pi-add-dir → additionalDirectories", () => {
   it("advertises the capability only when the extension is configured", async () => {
@@ -219,76 +102,5 @@ describe("pi-add-dir → additionalDirectories", () => {
     expect((resumed._meta as { pi: { additionalDirectories: string[] } }).pi.additionalDirectories).toEqual([
       lib,
     ]);
-  });
-});
-
-describe("plannotator → collaboration mode + plan", () => {
-  it("exposes collaboration_mode, /plan, and the executing checklist as a plan", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
-    installExtension(harness, "plannotator.js", PLANNOTATOR);
-    await harness.initialize();
-    const created = await harness.client.newSession({ cwd: harness.workspace, mcpServers: [] });
-    const sessionId = created.sessionId;
-    expect(created.configOptions?.find((o) => o.id === "collaboration_mode")).toMatchObject({
-      currentValue: "default",
-    });
-    await harness.settle();
-    const commands = harness
-      .updatesFor(sessionId)
-      .filter((u) => u.sessionUpdate === "available_commands_update")
-      .at(-1);
-    expect(
-      commands?.sessionUpdate === "available_commands_update" && commands.availableCommands[0],
-    ).toMatchObject({
-      name: "plan",
-      _meta: { commandAction: { kind: "setConfigOption", configId: "collaboration_mode", value: "plan" } },
-    });
-
-    const on = await harness.client.setSessionConfigOption({
-      sessionId,
-      configId: "collaboration_mode",
-      value: "plan",
-    });
-    expect(on.configOptions.find((o) => o.id === "collaboration_mode")).toMatchObject({
-      currentValue: "plan",
-    });
-    const off = await harness.client.setSessionConfigOption({
-      sessionId,
-      configId: "collaboration_mode",
-      value: "default",
-    });
-    expect(off.configOptions.find((o) => o.id === "collaboration_mode")).toMatchObject({
-      currentValue: "default",
-    });
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "/plan" }] });
-    expect(harness.text(sessionId)).toContain("Plan mode on");
-
-    writeFileSync(join(harness.workspace, "PLAN.md"), "# Plan\n\n- [ ] Write tests\n- [ ] Ship it\n");
-    harness.respond(
-      fauxAssistantMessage([fauxToolCall("plannotator_submit_plan", { filePath: "PLAN.md" })]),
-      fauxAssistantMessage([fauxToolCall("plannotator_mark_done", { step: 1 })]),
-      fauxAssistantMessage("ok"),
-    );
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "go" }] });
-    const seen = plans(harness, sessionId).map((u) => (u.sessionUpdate === "plan" ? u.entries : []));
-    expect(seen).toEqual([
-      [
-        { content: "Write tests", status: "pending", priority: "medium" },
-        { content: "Ship it", status: "pending", priority: "medium" },
-      ],
-      [
-        { content: "Write tests", status: "completed", priority: "medium" },
-        { content: "Ship it", status: "pending", priority: "medium" },
-      ],
-    ]);
-    expect(readFileSync(join(harness.workspace, "PLAN.md"), "utf8")).toContain("- [x] Write tests");
-    const options = harness
-      .updatesFor(sessionId)
-      .filter((u) => u.sessionUpdate === "config_option_update")
-      .at(-1);
-    expect(
-      options?.sessionUpdate === "config_option_update" &&
-        options.configOptions.find((o) => o.id === "collaboration_mode"),
-    ).toMatchObject({ currentValue: "default" });
   });
 });
