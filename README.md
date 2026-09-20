@@ -56,8 +56,10 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `usage` on every `session/prompt` response.
 - **Compaction and retries** — `compaction_update` for manual/automatic compaction; auto-retry
   notices; queued-message state.
-- **Additional directories** — ACP `additionalDirectories` are listed, with their AGENTS.md
-  and other pi context files, in the system prompt of every turn.
+- **Known extensions, first-class** — pi has no plan, plan-mode, or multi-root primitive and
+  the adapter invents none. When the user has installed the extension that provides one, its own
+  wire shapes are mapped onto ACP: `@juicesharp/rpiv-todo` → `plan`, `@plannotator/pi-extension`
+  → `collaboration_mode` + `/plan` + checklist `plan`, `pi-add-dir` → `additionalDirectories`.
 - **Sessions** — `session/list` (pi's own store, filtered by cwd), `session/load` with full
   history replay (compaction-aware branch), `session/resume` without replay, `session/fork`,
   `session/close`, `session/delete`, session titles, and silent restore when a client prompts

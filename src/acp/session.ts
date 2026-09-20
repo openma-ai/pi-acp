@@ -10,6 +10,7 @@ import type {
   AgentSideConnection,
   AvailableCommand,
   McpServer,
+  PlanEntry,
   SessionConfigOption,
   StopReason,
   ToolCallUpdate,
@@ -67,7 +68,18 @@ import {
   type TerminalOutputMode,
 } from "./translate.ts";
 import { createAcpUiContext } from "./ui-context.ts";
-import { additionalDirectoriesPrompt, resolveAdditionalDirectories } from "./additional-directories.ts";
+import { detectFromInventory, type KnownExtensionId } from "./extensions/registry.ts";
+import { applyAdditionalDirectories, readAddedDirectories } from "./extensions/pi-add-dir.ts";
+import { planFromRpivTodo } from "./extensions/rpiv-todo.ts";
+import {
+  collaborationModeOption,
+  PLAN_COMMAND_ENTRY,
+  planFromPlannotator,
+  plannotatorPlanChanged,
+  readPlannotatorState,
+  requestPlanMode,
+  type PlannotatorPhase,
+} from "./extensions/plannotator.ts";
 
 export interface ClientFeatures {
   /** Display-terminal `_meta` extension the client renders (`_meta.terminal_output[_delta]`). */
@@ -141,7 +153,9 @@ export class PiAcpSession {
   private readonly mcpMounts: McpMount[] = [];
   private mcpDiagnostics: string[] = [];
   private eventBus: TappedEventBus | undefined;
-  private _additionalDirectories: string[] = [];
+  private known = new Set<KnownExtensionId>();
+  private requestedDirectories: readonly string[] | undefined;
+  private lastPlanJson: string | undefined;
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
@@ -181,8 +195,14 @@ export class PiAcpSession {
     return [...this.startupDiagnostics, ...this.mcpDiagnostics];
   }
 
-  get additionalDirectories(): readonly string[] {
-    return this._additionalDirectories;
+  /** Known third-party extensions loaded in this session (see extensions/registry.ts). */
+  get knownExtensions(): ReadonlySet<KnownExtensionId> {
+    return this.known;
+  }
+
+  /** Directories tracked by pi-add-dir for this session (empty when it is not installed). */
+  get additionalDirectories(): string[] {
+    return this.known.has("pi-add-dir") ? readAddedDirectories(this.session) : [];
   }
 
   static async open(options: SessionOpenOptions): Promise<PiAcpSession> {
@@ -214,20 +234,12 @@ export class PiAcpSession {
     this.mcpMounts.push(...mcp.mounts);
     this.mcpDiagnostics = mcp.diagnostics;
 
-    const extra = resolveAdditionalDirectories(this.cwd, options.additionalDirectories);
-    this._additionalDirectories = extra.directories;
-    for (const problem of extra.problems) {
-      this.mcpDiagnostics.push(`warning: additional directory ${problem.path} skipped: ${problem.reason}`);
-    }
+    this.requestedDirectories = options.additionalDirectories;
 
     const gate: InlineExtension = {
       name: ADAPTER_EXTENSION_NAME,
       factory: (pi: ExtensionAPI) => {
         pi.on("tool_call", (event) => this.policy.gate(event, (call) => this.requestToolPermission(call)));
-        pi.on("before_agent_start", (event) => {
-          const section = additionalDirectoriesPrompt(this._additionalDirectories, agentDir);
-          return section.length > 0 ? { systemPrompt: `${event.systemPrompt}\n\n${section}` } : undefined;
-        });
       },
     };
     // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.
@@ -318,6 +330,22 @@ export class PiAcpSession {
     if (this.runtime.modelFallbackMessage !== undefined)
       this.startupDiagnostics.push(this.runtime.modelFallbackMessage);
     await this.bindSession();
+    await this.applyRequestedDirectories();
+  }
+
+  /** ACP `additionalDirectories` → pi-add-dir (no-op when the extension is absent). */
+  private async applyRequestedDirectories(): Promise<void> {
+    const requested = this.requestedDirectories;
+    this.requestedDirectories = undefined;
+    if (requested === undefined || requested.length === 0) return;
+    if (!this.known.has("pi-add-dir")) {
+      this.mcpDiagnostics.push(
+        `warning: additionalDirectories ignored (${requested.join(", ")}): install pi-add-dir (pi install npm:pi-add-dir) to add workspace roots`,
+      );
+      return;
+    }
+    const problems = await applyAdditionalDirectories(this.session, this.cwd, requested);
+    for (const problem of problems) this.mcpDiagnostics.push(`warning: ${problem}`);
   }
 
   private resolveProjectTrust(cwd: string, agentDir: string): boolean {
@@ -402,6 +430,7 @@ export class PiAcpSession {
     });
     this.projection.setContextWindow(session.model?.contextWindow);
     this.projection.setToolOwner(toolOwnerLookup(session));
+    this.known = detectFromInventory(extensionInventory(session));
     this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event));
   }
 
@@ -412,7 +441,58 @@ export class PiAcpSession {
 
   private onSessionEvent(event: AgentSessionEvent): void {
     for (const update of this.projection.onEvent(event)) this.emit(update);
+    this.projectKnownExtensions(event);
     if (event.type === "agent_settled") this.settle();
+  }
+
+  /** First-class ACP surfaces backed by known third-party extensions. */
+  private projectKnownExtensions(event: AgentSessionEvent): void {
+    if (this.known.has("rpiv-todo") && event.type === "tool_execution_end") {
+      const details = (event.result as { details?: unknown } | undefined)?.details;
+      const entries = planFromRpivTodo(event.toolName, details);
+      if (entries !== undefined) this.emitPlan(entries);
+    }
+    if (this.known.has("plannotator")) {
+      const facts =
+        event.type === "tool_execution_end"
+          ? { toolName: event.toolName }
+          : event.type === "entry_appended"
+            ? { customType: (event.entry as { customType?: string }).customType }
+            : event.type === "message_end"
+              ? { customType: (event.message as { customType?: string }).customType }
+              : undefined;
+      if (facts !== undefined && plannotatorPlanChanged(facts)) {
+        const entries = planFromPlannotator(this.session, this.cwd);
+        if (entries !== undefined) this.emitPlan(entries);
+        if (facts.customType !== undefined) this.publishConfigOptions();
+      }
+    }
+  }
+
+  private emitPlan(entries: ReturnType<typeof planFromRpivTodo> & object): void {
+    const json = JSON.stringify(entries);
+    if (json === this.lastPlanJson) return;
+    this.lastPlanJson = json;
+    this.emit({ sessionUpdate: "plan", entries });
+  }
+
+  /** Current Plannotator phase from its persisted state (undefined when not installed). */
+  plannotatorPhase(): PlannotatorPhase | undefined {
+    if (!this.known.has("plannotator")) return undefined;
+    return readPlannotatorState(this.session)?.phase ?? "idle";
+  }
+
+  /** Drive Plannotator plan mode through its event API; returns the resulting phase. */
+  async setCollaborationMode(value: string): Promise<PlannotatorPhase> {
+    if (!this.known.has("plannotator"))
+      throw invalidParams("collaboration_mode requires @plannotator/pi-extension");
+    const mode = value === "plan" ? "enter" : value === "default" ? "exit" : undefined;
+    if (mode === undefined) throw invalidParams(`unknown collaboration mode: ${value}`);
+    try {
+      return await requestPlanMode((channel, data) => this.eventBus?.inject(channel, data), mode);
+    } catch (error: unknown) {
+      throw internalError(`plan mode change failed: ${errorMessage(error)}`);
+    }
   }
 
   private onExtensionEvent(channel: string, data: unknown): void {
@@ -454,9 +534,12 @@ export class PiAcpSession {
   // ------------------------------------------------------------------ //
 
   configOptions(): SessionConfigOption[] {
-    return buildConfigOptions(this.session, this.policy.mode, {
+    const options = buildConfigOptions(this.session, this.policy.mode, {
       booleanOptions: this.features.booleanConfigOptions,
     });
+    const phase = this.plannotatorPhase();
+    if (phase !== undefined) options.splice(1, 0, collaborationModeOption(phase));
+    return options;
   }
 
   modes(): ReturnType<typeof modeState> {
@@ -464,9 +547,13 @@ export class PiAcpSession {
   }
 
   availableCommands(): AvailableCommand[] {
-    return availableCommandsFor(this.session, {
+    const commands = availableCommandsFor(this.session, {
       enableSkillCommands: this.session.settingsManager.getEnableSkillCommands(),
     });
+    if (this.known.has("plannotator") && !commands.some((c) => c.name === PLAN_COMMAND_ENTRY.name)) {
+      commands.unshift(PLAN_COMMAND_ENTRY);
+    }
+    return commands;
   }
 
   publishCommands(): void {
@@ -494,6 +581,28 @@ export class PiAcpSession {
     if (title !== undefined) {
       this.emit({ sessionUpdate: "session_info_update", title, updatedAt: new Date().toISOString() });
     }
+    const plan = this.replayKnownPlan();
+    if (plan !== undefined) this.emitPlan(plan);
+  }
+
+  /** Last plan snapshot an installed extension persisted on the branch. */
+  private replayKnownPlan(): PlanEntry[] | undefined {
+    if (this.known.has("plannotator")) {
+      const entries = planFromPlannotator(this.session, this.cwd);
+      if (entries !== undefined) return entries;
+    }
+    if (this.known.has("rpiv-todo")) {
+      let latest: PlanEntry[] | undefined;
+      for (const entry of this.session.sessionManager.getBranch()) {
+        if (entry.type !== "message") continue;
+        const message = entry.message as { role?: string; toolName?: string; details?: unknown };
+        if (message.role !== "toolResult") continue;
+        const entries = planFromRpivTodo(message.toolName ?? "", message.details);
+        if (entries !== undefined) latest = entries;
+      }
+      return latest;
+    }
+    return undefined;
   }
 
   setMode(mode: PermissionMode): void {

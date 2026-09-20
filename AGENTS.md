@@ -39,8 +39,11 @@ npm run format
 ```
 
 Do not add tools, protocol conventions, or semantics pi does not have. If pi
-lacks a primitive (plan, subagents, background tasks), the ACP surface lacks it
-too; extension traffic is forwarded as-is, never interpreted.
+lacks a primitive, the ACP surface lacks it too — unless a widely used pi
+extension provides it, in which case `src/acp/extensions/` adapts that
+extension's own documented wire shapes (detected by package identity) and the
+feature appears only when it is installed. All other extension traffic is
+forwarded as-is, never interpreted.
 
 Do not commit or publish unless asked. Patch releases only unless the
 maintainer approves a minor bump.

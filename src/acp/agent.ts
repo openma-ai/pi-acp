@@ -67,6 +67,8 @@ import { piMeta, readPiMeta } from "./meta.ts";
 import { isPermissionMode } from "./permissions.ts";
 import { convertPrompt, UnsupportedPromptContentError } from "./prompt.ts";
 import type { RequestIdTracker } from "./request-ids.ts";
+import { detectFromSettings } from "./extensions/registry.ts";
+import { COLLABORATION_MODE_OPTION, PLAN_COMMAND } from "./extensions/plannotator.ts";
 import { PiAcpSession, type ClientFeatures } from "./session.ts";
 import { findSession, listSessions, toAcpSessionInfo } from "./sessions-index.ts";
 import { buildStartupInfo } from "./startup-info.ts";
@@ -300,6 +302,7 @@ export class PiAcpAgent implements AcpAgent {
     } catch (error: unknown) {
       logWarn(`model runtime unavailable at initialize: ${errorMessage(error)}`);
     }
+    const knownAtStartup = detectFromSettings(process.cwd(), this.agentDir);
     const requested = params.protocolVersion;
     const response: InitializeResponse = {
       protocolVersion:
@@ -317,7 +320,8 @@ export class PiAcpAgent implements AcpAgent {
           fork: {},
           resume: {},
           close: {},
-          additionalDirectories: {},
+          // Only when pi-add-dir is installed: the adapter has no multi-root primitive of its own.
+          ...(knownAtStartup.has("pi-add-dir") ? { additionalDirectories: {} } : {}),
         },
         auth: { logout: {} },
         _meta: {
@@ -610,6 +614,17 @@ export class PiAcpAgent implements AcpAgent {
     // Adapter built-ins never reach the model; pi handles its own slash commands
     // (extension commands, prompt templates, /skill:name) inside `prompt()`.
     const slash = converted.images.length === 0 ? parseSlashCommand(converted.text) : undefined;
+    if (slash !== undefined && slash.name === PLAN_COMMAND && session.knownExtensions.has("plannotator")) {
+      if (session.isRunning) {
+        session.text("⚠ /plan is unavailable while a turn is running.");
+        return { stopReason: "end_turn" };
+      }
+      const phase = await session.setCollaborationMode("plan");
+      session.text(phase === "planning" ? "Plan mode on (Plannotator)." : `Plannotator phase: ${phase}.`);
+      session.publishConfigOptions();
+      await session.flush();
+      return { stopReason: "end_turn" };
+    }
     if (slash !== undefined && isBuiltinCommand(slash.name)) {
       if (session.isRunning && !["status", "queue", "mode", "session"].includes(slash.name)) {
         session.text(`⚠ /${slash.name} is unavailable while a turn is running.`);
@@ -680,6 +695,12 @@ export class PiAcpAgent implements AcpAgent {
         const enabled = parseBooleanOptionValue(value);
         if (enabled === undefined) throw invalidParams("auto_compaction must be a boolean or on/off");
         session.session.setAutoCompactionEnabled(enabled);
+        break;
+      }
+      case COLLABORATION_MODE_OPTION: {
+        if (typeof value !== "string") throw invalidParams("collaboration_mode must be a string");
+        if (session.isRunning) throw invalidParams("cannot change plan mode while a turn is running");
+        await session.setCollaborationMode(value);
         break;
       }
       default:
