@@ -6,14 +6,31 @@
  * addedAt }] }`), injects its AGENTS.md/CLAUDE.md into the system prompt, and
  * registers its skills. The adapter drives it exactly like a user would (the
  * slash command through `session.prompt`) and reads its state entry back.
+ *
+ * The package is bundled as a dependency and loaded into every session unless
+ * the user's pi settings already install it (no double registration).
  */
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { isAbsolute, resolve } from "node:path";
-import { errorMessage, logWarn } from "../../log.ts";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { errorMessage, logDebug, logWarn } from "../../log.ts";
 
 export const ADD_DIR_STATE_ENTRY = "add-dir:state";
 export const ADD_DIR_COMMAND = "add-dir";
+
+/** Entry file of the bundled pi-add-dir extension, or undefined if the dependency is missing. */
+export function bundledPiAddDirPath(): string | undefined {
+  try {
+    const manifest = createRequire(import.meta.url).resolve("pi-add-dir/package.json");
+    const entry = join(dirname(manifest), "extensions", "pi-add-dir", "index.ts");
+    return existsSync(entry) ? entry : undefined;
+  } catch (error: unknown) {
+    logDebug(`bundled pi-add-dir not resolvable: ${errorMessage(error)}`);
+    return undefined;
+  }
+}
 
 interface AddedDir {
   absolutePath: string;

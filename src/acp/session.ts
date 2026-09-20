@@ -67,8 +67,12 @@ import {
   type TerminalOutputMode,
 } from "./translate.ts";
 import { createAcpUiContext } from "./ui-context.ts";
-import { detectFromInventory, type KnownExtensionId } from "./extensions/registry.ts";
-import { applyAdditionalDirectories, readAddedDirectories } from "./extensions/pi-add-dir.ts";
+import { detectFromInventory, detectFromSettings, type KnownExtensionId } from "./extensions/registry.ts";
+import {
+  applyAdditionalDirectories,
+  bundledPiAddDirPath,
+  readAddedDirectories,
+} from "./extensions/pi-add-dir.ts";
 
 export interface ClientFeatures {
   /** Display-terminal `_meta` extension the client renders (`_meta.terminal_output[_delta]`). */
@@ -232,6 +236,11 @@ export class PiAcpSession {
     };
     // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.
     this.eventBus = createTappedEventBus((channel, data) => this.onExtensionEvent(channel, data));
+    // Bundled pi-add-dir backs ACP additionalDirectories; skipped when the user's pi already installs it.
+    const userInstallsAddDir = detectFromSettings(this.cwd, agentDir).has("pi-add-dir");
+    const bundled = userInstallsAddDir ? undefined : bundledPiAddDirPath();
+    if (bundled === undefined && !userInstallsAddDir)
+      logWarn("bundled pi-add-dir is missing; additionalDirectories will be unavailable");
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       cwd,
@@ -247,7 +256,11 @@ export class PiAcpSession {
         settingsManager,
         modelRuntime,
         modelRuntimeSignal: AbortSignal.timeout(15_000),
-        resourceLoaderOptions: { extensionFactories: [gate], eventBus: this.eventBus },
+        resourceLoaderOptions: {
+          extensionFactories: [gate],
+          eventBus: this.eventBus,
+          ...(bundled !== undefined ? { additionalExtensionPaths: [bundled] } : {}),
+        },
       });
       const customTools: ToolDefinition[] = [...mcp.tools];
       if (settings.delegation) {
@@ -328,7 +341,7 @@ export class PiAcpSession {
     if (requested === undefined || requested.length === 0) return;
     if (!this.known.has("pi-add-dir")) {
       this.mcpDiagnostics.push(
-        `warning: additionalDirectories ignored (${requested.join(", ")}): install pi-add-dir (pi install npm:pi-add-dir) to add workspace roots`,
+        `warning: additionalDirectories ignored (${requested.join(", ")}): the pi-add-dir extension did not load`,
       );
       return;
     }

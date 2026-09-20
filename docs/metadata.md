@@ -99,9 +99,10 @@ pi; correlate by channel namespace.
 
 `additionalDirectories` echoes the workspace roots tracked by the
 [pi-add-dir](https://pi.dev/packages/pi-add-dir) extension for this session.
-pi has no multi-root primitive; the capability is advertised only when
-pi-add-dir is configured, and ACP `additionalDirectories` are applied by
-running its `/add-dir <path>` command. Rejected entries appear in `diagnostics`.
+pi has no multi-root primitive; the adapter bundles pi-add-dir and loads it into
+every session (unless the user's pi settings already install it), and ACP
+`additionalDirectories` are applied by running its `/add-dir <path>` command.
+Rejected entries appear in `diagnostics`.
 
 `diagnostics` lists non-fatal startup problems (extension load errors, untrusted
 project resources, unavailable MCP servers).
@@ -219,15 +220,15 @@ complete on its own.
 
 ## Known third-party extensions
 
-pi lacks a multi-root primitive. Rather than inventing one, the adapter
-recognises the extension that provides it
+pi lacks a multi-root primitive. Rather than inventing one, the adapter bundles
+the extension that provides it
 (by package identity in settings and in the loaded-extension inventory) and
 maps that extension's own wire shapes onto ACP. Absent the extension, the ACP
 feature is absent.
 
-| Extension                                          | ACP surface                                                                                                                    |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| [`pi-add-dir`](https://pi.dev/packages/pi-add-dir) | `sessionCapabilities.additionalDirectories`; requested roots run `/add-dir <path>`; state read from its `add-dir:state` entry. |
+| Extension                                          | ACP surface                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`pi-add-dir`](https://pi.dev/packages/pi-add-dir) | Bundled dependency, loaded into every session unless already installed by pi. `sessionCapabilities.additionalDirectories`; requested roots run `/add-dir <path>`; state read from its `add-dir:state` entry; `/add-dir`, `/remove-dir`, `/dirs` and the `add_directory` tool are available as usual. |
 
 ## Extension methods
 

@@ -67,7 +67,6 @@ import { piMeta, readPiMeta } from "./meta.ts";
 import { isPermissionMode } from "./permissions.ts";
 import { convertPrompt, UnsupportedPromptContentError } from "./prompt.ts";
 import type { RequestIdTracker } from "./request-ids.ts";
-import { detectFromSettings } from "./extensions/registry.ts";
 import { PiAcpSession, type ClientFeatures } from "./session.ts";
 import { findSession, listSessions, toAcpSessionInfo } from "./sessions-index.ts";
 import { buildStartupInfo } from "./startup-info.ts";
@@ -301,7 +300,6 @@ export class PiAcpAgent implements AcpAgent {
     } catch (error: unknown) {
       logWarn(`model runtime unavailable at initialize: ${errorMessage(error)}`);
     }
-    const knownAtStartup = detectFromSettings(process.cwd(), this.agentDir);
     const requested = params.protocolVersion;
     const response: InitializeResponse = {
       protocolVersion:
@@ -319,8 +317,8 @@ export class PiAcpAgent implements AcpAgent {
           fork: {},
           resume: {},
           close: {},
-          // Only when pi-add-dir is installed: the adapter has no multi-root primitive of its own.
-          ...(knownAtStartup.has("pi-add-dir") ? { additionalDirectories: {} } : {}),
+          // Backed by the bundled pi-add-dir extension (see extensions/pi-add-dir.ts).
+          additionalDirectories: {},
         },
         auth: { logout: {} },
         _meta: {

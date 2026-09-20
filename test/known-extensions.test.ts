@@ -1,12 +1,12 @@
 /**
- * E2E: pi-add-dir surfaced as ACP `additionalDirectories`. The fixture
- * reproduces the extension's documented wire shape (command, state entry) so
- * the adapter is tested against the contract it adapts, without installing it.
+ * E2E: ACP `additionalDirectories` backed by the bundled pi-add-dir extension
+ * (the real package, loaded into every session).
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { bundledPiAddDirPath } from "../src/acp/extensions/pi-add-dir.ts";
 import { fauxAssistantMessage, Harness } from "./helpers/harness.ts";
 
 let harness: Harness | undefined;
@@ -16,82 +16,49 @@ afterEach(async () => {
   harness = undefined;
 });
 
-/** pi-add-dir: `/add-dir <path>` persists `add-dir:state`; `add_directory` tool exists. */
-const PI_ADD_DIR = `
-import { Type } from "typebox";
-export default function (pi) {
-  let dirs = [];
-  pi.on("session_start", (_e, ctx) => {
-    for (const e of ctx.sessionManager.getBranch()) if (e.type === "custom" && e.customType === "add-dir:state") dirs = e.data.dirs;
-  });
-  pi.registerCommand("add-dir", { description: "add", handler: async (args, ctx) => {
-    if (!args) return;
-    if (dirs.some((d) => d.absolutePath === args)) { ctx.ui.notify("Already added: " + args, "error"); return; }
-    dirs.push({ absolutePath: args, label: "x", addedAt: 1 });
-    pi.appendEntry("add-dir:state", { dirs });
-    ctx.ui.notify("Added " + args, "info");
-  } });
-  pi.registerTool({ name: "add_directory", description: "add", parameters: Type.Object({ path: Type.String() }), async execute() { return { content: [] }; } });
-}
-`;
-
-function installExtension(h: Harness, file: string, source: string): string {
-  const dir = join(h.agentDir, "extensions");
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, file);
-  writeFileSync(path, source);
-  return path;
+function addDirOwners(h: Harness, created: { _meta?: unknown }): string[] {
+  const extensions = (created._meta as { pi: { extensions: { path: string; tools: string[] }[] } }).pi
+    .extensions;
+  return extensions.filter((e) => e.tools.includes("add_directory")).map((e) => e.path);
 }
 
-describe("pi-add-dir → additionalDirectories", () => {
-  it("advertises the capability only when the extension is configured", async () => {
+describe("additionalDirectories via bundled pi-add-dir", () => {
+  it("advertises the capability and loads the bundled extension into every session", async () => {
     harness = await Harness.create();
-    const without = await harness.initialize();
-    expect(without.agentCapabilities?.sessionCapabilities?.additionalDirectories).toBeUndefined();
-    const created = await harness.client.newSession({
-      cwd: harness.workspace,
-      mcpServers: [],
-      additionalDirectories: [harness.root],
-    });
-    expect((created._meta as { pi: { diagnostics: string[] } }).pi.diagnostics[0]).toMatch(
-      /install pi-add-dir/,
+    const init = await harness.initialize();
+    expect(init.agentCapabilities?.sessionCapabilities?.additionalDirectories).toEqual({});
+    const created = await harness.client.newSession({ cwd: harness.workspace, mcpServers: [] });
+    expect(addDirOwners(harness, created)).toEqual([bundledPiAddDirPath()]);
+    expect((created._meta as { pi: { additionalDirectories: string[] } }).pi.additionalDirectories).toEqual(
+      [],
     );
-    await harness.close();
-
-    harness = await Harness.create();
-    const path = installExtension(harness, "pi-add-dir.js", PI_ADD_DIR);
-    writeFileSync(
-      join(harness.agentDir, "settings.json"),
-      JSON.stringify({ quietStartup: true, retry: { enabled: false }, extensions: [path] }),
-    );
-    const withExt = await harness.initialize();
-    expect(withExt.agentCapabilities?.sessionCapabilities?.additionalDirectories).toEqual({});
   });
 
-  it("drives /add-dir for each requested root and echoes the extension's state", async () => {
+  it("adds requested roots through /add-dir, echoes the extension's state, and survives resume", async () => {
     harness = await Harness.create();
-    installExtension(harness, "pi-add-dir.js", PI_ADD_DIR);
     await harness.initialize();
     const lib = join(harness.root, "lib");
     mkdirSync(lib, { recursive: true });
+    writeFileSync(join(lib, "AGENTS.md"), "# lib\n");
     const created = await harness.client.newSession({
       cwd: harness.workspace,
       mcpServers: [],
       additionalDirectories: [lib, harness.workspace, "relative"],
     });
     const meta = (created._meta as { pi: { additionalDirectories: string[]; diagnostics: string[] } }).pi;
-    expect(meta.additionalDirectories).toEqual([lib]);
+    expect(meta.additionalDirectories).toEqual([realpathSync(lib)]);
     expect(meta.diagnostics).toEqual([expect.stringContaining("relative skipped: not an absolute path")]);
-    const entries = harness
-      .updatesFor(created.sessionId)
-      .map((u) => (u._meta as { pi?: { event?: string; customType?: string } } | undefined)?.pi)
-      .filter((m) => m?.event === "custom_entry" && m.customType === "add-dir:state");
-    expect(entries).toHaveLength(1);
+    await harness.settle();
+    expect(harness.text(created.sessionId)).toContain("Found: AGENTS.md");
 
-    // pi writes the session file on the first assistant message; give it one before resuming.
-    harness.respond(fauxAssistantMessage("hi"));
+    let systemPrompt = "";
+    harness.respond((context) => {
+      systemPrompt = context.systemPrompt ?? "";
+      return fauxAssistantMessage("hi");
+    });
     await harness.client.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "hi" }] });
-    // Resume with the same list: already tracked, nothing re-added.
+    expect(systemPrompt).toContain(realpathSync(lib));
+
     await harness.client.closeSession({ sessionId: created.sessionId });
     const resumed = await harness.client.resumeSession({
       sessionId: created.sessionId,
@@ -100,7 +67,28 @@ describe("pi-add-dir → additionalDirectories", () => {
       additionalDirectories: [lib],
     });
     expect((resumed._meta as { pi: { additionalDirectories: string[] } }).pi.additionalDirectories).toEqual([
-      lib,
+      realpathSync(lib),
     ]);
+  });
+
+  it("does not load the bundled copy when the user's pi already installs pi-add-dir", async () => {
+    harness = await Harness.create();
+    const userCopy = join(harness.agentDir, "extensions", "pi-add-dir.js");
+    mkdirSync(join(harness.agentDir, "extensions"), { recursive: true });
+    writeFileSync(
+      userCopy,
+      `import { Type } from "typebox";
+export default function (pi) {
+  pi.registerCommand("add-dir", { description: "user copy", handler: async () => {} });
+  pi.registerTool({ name: "add_directory", description: "x", parameters: Type.Object({ path: Type.String() }), async execute() { return { content: [] }; } });
+}`,
+    );
+    writeFileSync(
+      join(harness.agentDir, "settings.json"),
+      JSON.stringify({ quietStartup: true, retry: { enabled: false }, extensions: [userCopy] }),
+    );
+    await harness.initialize();
+    const created = await harness.client.newSession({ cwd: harness.workspace, mcpServers: [] });
+    expect(addDirOwners(harness, created)).toEqual([userCopy]);
   });
 });
