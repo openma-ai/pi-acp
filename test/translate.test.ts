@@ -206,7 +206,7 @@ describe("SessionProjection streaming", () => {
     expect(updates[1]).toMatchObject({
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "" },
-      _meta: { piAcp: { event: "assistant_message" } },
+      _meta: { pi: { event: "assistant_message" } },
     });
     expect(p.promptUsage()).toEqual({ totalTokens: 15, inputTokens: 10, outputTokens: 5 });
     p.beginPrompt();

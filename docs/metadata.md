@@ -4,7 +4,7 @@ This file is the source of truth for every `_meta` field `@openma/pi-acp`
 reads or emits. Standard ACP fields are always sufficient; every block below is
 optional and clients must ignore what they do not understand.
 
-Adapter-owned keys live under `_meta.piAcp`. Keys outside that namespace keep
+Adapter-owned keys live under `_meta.pi`. Keys outside that namespace keep
 the spelling of the external contract they implement (`terminal_output`,
 `terminal_info`, `terminal_exit`, `terminal-auth`, `api-key`, `steering`).
 
@@ -31,7 +31,7 @@ The initialize response carries:
   "_meta": { "steering": { "supported": true } },
   "agentCapabilities": {
     "_meta": {
-      "piAcp": {
+      "pi": {
         "version": "0.1.0",
         "delegation": { "readTextFile": false, "writeTextFile": false, "terminal": false }
       }
@@ -52,7 +52,7 @@ The initialize response carries:
 | -------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `pi-terminal-login`  | `_meta["terminal-auth"] = { command, args, label }` (only when the client advertised `terminal-auth`) | Launch `openma-pi-acp --terminal-login`, which runs pi interactively.                                            |
 | `api-key:<provider>` | `_meta["api-key"].provider: string`                                                                   | Provide an API key for one pi provider.                                                                          |
-| `oauth:<provider>`   | `_meta.piAcp.oauth: { provider, subscription }`                                                       | Run pi's provider OAuth flow over elicitation. Advertised only when the client supports URL or form elicitation. |
+| `oauth:<provider>`   | `_meta.pi.oauth: { provider, subscription }`                                                          | Run pi's provider OAuth flow over elicitation. Advertised only when the client supports URL or form elicitation. |
 
 An `authenticate` request for an API key:
 
@@ -71,7 +71,7 @@ logged or persisted as transcript content.
 ```json
 {
   "_meta": {
-    "piAcp": { "sessionFile": "/Users/me/.pi/agent/sessions/…/….jsonl", "diagnostics": ["warning: …"] }
+    "pi": { "sessionFile": "/Users/me/.pi/agent/sessions/…/….jsonl", "diagnostics": ["warning: …"] }
   }
 }
 ```
@@ -91,7 +91,7 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
   "content": { "type": "text", "text": "" },
   "messageId": "m3",
   "_meta": {
-    "piAcp": { "event": "assistant_message", "stopReason": "stop", "model": "anthropic/claude-opus-4-5" }
+    "pi": { "event": "assistant_message", "stopReason": "stop", "model": "anthropic/claude-opus-4-5" }
   }
 }
 ```
@@ -102,7 +102,7 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
 
 ### Notices carried as `session_info_update`
 
-`_meta.piAcp.event` discriminates metadata-only facts with no dedicated ACP update:
+`_meta.pi.event` discriminates metadata-only facts with no dedicated ACP update:
 
 | Event             | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -116,16 +116,16 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
 | `custom_message`  | `customType`, `display`, `preview` — a pi custom message entry                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `branch_summary`  | `fromId`, `summary`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `file_changes`    | `files: [{ path, kind: "add" \| "update", added, removed }]` — files edited during the turn, emitted once when the turn settles                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `failure`         | `kind: "auth_required" \| "rate_limited" \| "context_overflow" \| "network" \| "provider_error" \| "cancelled" \| "unknown"`, `message` — emitted before a failed `session/prompt` rejects; the error's `data.piAcp.failure` carries the same kind                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `failure`         | `kind: "auth_required" \| "rate_limited" \| "context_overflow" \| "network" \| "provider_error" \| "cancelled" \| "unknown"`, `message` — emitted before a failed `session/prompt` rejects; the error's `data.pi.failure` carries the same kind                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `extension_event` | One `pi.events.emit` from any extension. `channel`, `namespace` (before the first `:`/`.`, else `pi`), `name`, `payload` (JSON-safe, ≤ 8 KB), `truncated`, `inferred: true`, and two **inferences**: `phase?` (`started` \| `update` \| `completed` \| `failed` \| `cancelled` \| `request` \| `response`, from the channel's trailing token) and `correlationId?` (first of `id`/`runId`/`taskId`/`jobId`/`childId`/`requestId`/`asyncId`/`workflowId`/`sessionId`/`pid`). The adapter does not know what the event means; clients may group by `namespace`+`correlationId` and track `phase` as a work-item lifecycle, treating a missing terminal phase as unknown. |
 
 A retry start also emits a visible italic `agent_message_chunk` with
-`_meta.piAcp.notice: "auto_retry"`; extension `notify()` calls emit a chunk with
-`_meta.piAcp.notify: { level, message }`.
+`_meta.pi.notice: "auto_retry"`; extension `notify()` calls emit a chunk with
+`_meta.pi.notify: { level, message }`.
 
 ### Compaction
 
-`compaction_update` carries `_meta.piAcp.reason` (`manual` / `threshold` /
+`compaction_update` carries `_meta.pi.reason` (`manual` / `threshold` /
 `overflow`) and `tokensBefore` on completion.
 
 ### Diff metadata
@@ -138,7 +138,7 @@ Every `diff` content block on `edit`/`write` tool results carries:
   "path": "/abs/file",
   "oldText": "…",
   "newText": "…",
-  "_meta": { "piAcp": { "fileChange": "update", "diffStats": { "added": 2, "removed": 1 } } }
+  "_meta": { "pi": { "fileChange": "update", "diffStats": { "added": 2, "removed": 1 } } }
 }
 ```
 
@@ -164,7 +164,7 @@ is not delegated to a client terminal:
 Entries in `available_commands_update` carry provenance:
 
 ```json
-{ "name": "deploy", "description": "…", "_meta": { "piAcp": { "source": "prompt", "path": "/…/deploy.md" } } }
+{ "name": "deploy", "description": "…", "_meta": { "pi": { "source": "prompt", "path": "/…/deploy.md" } } }
 ```
 
 `source` is `extension`, `prompt`, or `skill`. Built-ins that change session
@@ -177,7 +177,7 @@ so clients can render them as state controls and refresh config options after us
 Forms generated for pi extension dialogs include the original request:
 
 ```json
-{ "_meta": { "piAcp": { "ui": "select", "title": "Pick a branch", "options": ["main", "dev"] } } }
+{ "_meta": { "pi": { "ui": "select", "title": "Pick a branch", "options": ["main", "dev"] } } }
 ```
 
 `ui` is `select`, `confirm`, `input`, or `editor`. The standard form schema is

@@ -113,7 +113,7 @@ export function availableCommandsFor(
     push({
       name: command.invocationName,
       description: command.description ?? `${command.invocationName} (extension)`,
-      _meta: { piAcp: { source: "extension", path: command.sourceInfo.path } },
+      _meta: { pi: { source: "extension", path: command.sourceInfo.path } },
     });
   }
   for (const template of session.promptTemplates) {
@@ -121,7 +121,7 @@ export function availableCommandsFor(
       name: template.name,
       description: template.description || `${template.name} (${template.sourceInfo.source})`,
       ...(template.argumentHint !== undefined ? { input: { hint: template.argumentHint } } : {}),
-      _meta: { piAcp: { source: "prompt", path: template.filePath } },
+      _meta: { pi: { source: "prompt", path: template.filePath } },
     });
   }
   if (options.enableSkillCommands) {
@@ -130,7 +130,7 @@ export function availableCommandsFor(
         name: `skill:${skill.name}`,
         description: skill.description,
         input: { hint: "instructions for the skill" },
-        _meta: { piAcp: { source: "skill", path: skill.filePath } },
+        _meta: { pi: { source: "skill", path: skill.filePath } },
       });
     }
   }

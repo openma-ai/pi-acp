@@ -35,7 +35,7 @@ function extensionEvents(h: Harness, sessionId: string): Record<string, unknown>
   return h
     .updatesFor(sessionId)
     .filter((u) => u.sessionUpdate === "session_info_update")
-    .map((u) => (u._meta as { piAcp?: Record<string, unknown> } | undefined)?.piAcp)
+    .map((u) => (u._meta as { pi?: Record<string, unknown> } | undefined)?.pi)
     .filter((m): m is Record<string, unknown> => m?.["event"] === "extension_event");
 }
 

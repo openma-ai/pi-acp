@@ -67,7 +67,7 @@ describe("auth", () => {
     const method = (withUrl.authMethods ?? []).find((m) => m.id === "oauth:faux-oauth");
     expect(method).toMatchObject({
       name: "Sign in to Faux Cloud",
-      _meta: { piAcp: { oauth: { subscription: true } } },
+      _meta: { pi: { oauth: { subscription: true } } },
     });
     expect(withUrl.agentCapabilities?._meta).toMatchObject({ authStatus: {} });
   });
@@ -229,20 +229,20 @@ describe("file changes and failures", () => {
     expect(diffs[0]).toMatchObject({
       type: "diff",
       path: file,
-      _meta: { piAcp: { fileChange: "update", diffStats: { added: 2, removed: 1 } } },
+      _meta: { pi: { fileChange: "update", diffStats: { added: 2, removed: 1 } } },
     });
     expect(diffs[1]).toMatchObject({
       type: "diff",
-      _meta: { piAcp: { fileChange: "add", diffStats: { added: 2, removed: 0 } } },
+      _meta: { pi: { fileChange: "add", diffStats: { added: 2, removed: 0 } } },
     });
     const report = harness
       .updatesFor(sessionId)
       .find(
         (u) =>
           u.sessionUpdate === "session_info_update" &&
-          (u._meta as { piAcp?: { event?: string } } | undefined)?.piAcp?.event === "file_changes",
+          (u._meta as { pi?: { event?: string } } | undefined)?.pi?.event === "file_changes",
       );
-    const files = (report?._meta as { piAcp: { files: { path: string }[] } }).piAcp.files.sort((a, b) =>
+    const files = (report?._meta as { pi: { files: { path: string }[] } }).pi.files.sort((a, b) =>
       a.path.localeCompare(b.path),
     );
     expect(files).toEqual([
@@ -262,15 +262,15 @@ describe("file changes and failures", () => {
     await expect(
       harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "go" }] }),
     ).rejects.toMatchObject({
-      data: { piAcp: { failure: "provider_error" } },
+      data: { pi: { failure: "provider_error" } },
     });
     const notice = harness
       .updatesFor(sessionId)
       .find(
         (u) =>
           u.sessionUpdate === "session_info_update" &&
-          (u._meta as { piAcp?: { event?: string } } | undefined)?.piAcp?.event === "failure",
+          (u._meta as { pi?: { event?: string } } | undefined)?.pi?.event === "failure",
       );
-    expect(notice?._meta).toMatchObject({ piAcp: { kind: "provider_error" } });
+    expect(notice?._meta).toMatchObject({ pi: { kind: "provider_error" } });
   });
 });

@@ -1,7 +1,7 @@
 /**
  * `_meta` namespace owned by this adapter. See docs/metadata.md for the registry.
  */
-export const META_NS = "piAcp";
+export const META_NS = "pi";
 
 export function piMeta(value: Record<string, unknown>): { [META_NS]: Record<string, unknown> } {
   return { [META_NS]: value };

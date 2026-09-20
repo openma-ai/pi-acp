@@ -22,7 +22,7 @@
 - Keep pi's packages `external` in the build: sessions, extensions, and the
   credential store must share one module identity with the user's installed pi.
 - Prefer a standard ACP field over `_meta`; when `_meta` is needed, namespace it
-  under `piAcp` and document it.
+  under `pi` and document it.
 - Translation modules stay pure and synchronous; test them without a runtime.
 - E2E tests use the faux model provider (`@earendil-works/pi-ai` `fauxProvider`)
   through the in-memory harness in `test/helpers/harness.ts`; never dial a

@@ -32,7 +32,7 @@ export function looksLikeAuthError(error: unknown): boolean {
   return AUTH_PATTERNS.some((pattern) => message.includes(pattern));
 }
 
-/** Typed failure classes surfaced as `_meta.piAcp.event: "failure"` and on prompt errors. */
+/** Typed failure classes surfaced as `_meta.pi.event: "failure"` and on prompt errors. */
 export type FailureKind =
   | "auth_required"
   | "rate_limited"

@@ -19,7 +19,7 @@ describe("MCP servers", () => {
       mcpServers: [{ name: "fixture server", command: process.execPath, args: [fixture], env: [] }],
     });
     const sessionId = created.sessionId;
-    expect(created._meta).toMatchObject({ piAcp: { diagnostics: [] } });
+    expect(created._meta).toMatchObject({ pi: { diagnostics: [] } });
 
     harness.respond(
       fauxAssistantMessage([fauxToolCall("mcp__fixture_server__echo", { text: "hi" })]),
@@ -43,7 +43,7 @@ describe("MCP servers", () => {
       cwd: harness.workspace,
       mcpServers: [{ name: "broken", command: "/nonexistent/binary", args: [], env: [] }],
     });
-    const meta = created._meta as { piAcp: { diagnostics: string[] } };
-    expect(meta.piAcp.diagnostics[0]).toMatch(/MCP server "broken" unavailable/);
+    const meta = created._meta as { pi: { diagnostics: string[] } };
+    expect(meta.pi.diagnostics[0]).toMatch(/MCP server "broken" unavailable/);
   });
 });
