@@ -85,6 +85,10 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `oauth:<provider>` methods that run pi's browser/device-code OAuth flows through ACP
   elicitation (Anthropic, OpenAI Codex, GitHub Copilot, …), `_auth/status_update` pushes, and
   `logout`.
+- **Extension events** — every `pi.events.emit` from any extension (pi-subagents, pi-goal, …) is
+  forwarded as `extension_event` metadata with the payload plus two marked inferences from
+  naming conventions: a lifecycle `phase` and a `correlationId`. Clients get a work-item
+  stream with unknown semantics but a known lifecycle; `_pi/emit_event` sends events back in.
 - **Capability-aware** — boolean config options degrade to selects, display terminals follow
   `terminal_output` / `terminal_output_delta`, diffs carry `diffStats` and add/update kind, each
   turn ends with a file-change summary, and failed turns carry a typed failure kind.

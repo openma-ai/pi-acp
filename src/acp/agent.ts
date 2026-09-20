@@ -658,6 +658,7 @@ export class PiAcpAgent implements AcpAgent {
   async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (method === "_session/steering") return this.steering(params);
     if (method === "_pi/trust_project") return this.trustProject(params);
+    if (method === "_pi/emit_event") return this.emitEvent(params);
     if (method === LEGACY_SET_MODEL_METHOD) return this.legacySetModel(params);
     throw RequestError.methodNotFound(method);
   }
@@ -698,6 +699,22 @@ export class PiAcpAgent implements AcpAgent {
       throw internalError(`steering failed: ${errorMessage(error)}`);
     }
     return { outcome: "injected" };
+  }
+
+  /** `_pi/emit_event`: publish on the session's extension event bus (the reverse of `extension_event`). */
+  private async emitEvent(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const sessionId = params["sessionId"];
+    const channel = params["channel"];
+    if (
+      typeof sessionId !== "string" ||
+      sessionId.length === 0 ||
+      typeof channel !== "string" ||
+      channel.length === 0
+    )
+      throw invalidParams("_pi/emit_event requires sessionId and channel");
+    const session = await this.requireOrRestore(sessionId);
+    session.injectExtensionEvent(channel, params["data"]);
+    return {};
   }
 
   /** `_pi/trust_project`: trust the session cwd (optionally remembered) and reload resources. */

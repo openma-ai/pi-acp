@@ -42,6 +42,7 @@ import { availableCommandsFor } from "./commands.ts";
 import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
 import { createDelegatedTools, type DelegationCapabilities } from "./delegation.ts";
 import { authRequired, classifyFailure, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
+import { createTappedEventBus, describeExtensionEvent, type TappedEventBus } from "./extension-events.ts";
 import { buildReplay } from "./history.ts";
 import { mountMcpServers, type McpMount } from "./mcp.ts";
 import { piMeta } from "./meta.ts";
@@ -131,6 +132,7 @@ export class PiAcpSession {
   private readonly features: ClientFeatures;
   private readonly mcpMounts: McpMount[] = [];
   private mcpDiagnostics: string[] = [];
+  private eventBus: TappedEventBus | undefined;
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
@@ -205,6 +207,8 @@ export class PiAcpSession {
         pi.on("tool_call", (event) => this.policy.gate(event, (call) => this.requestToolPermission(call)));
       },
     };
+    // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.
+    this.eventBus = createTappedEventBus((channel, data) => this.onExtensionEvent(channel, data));
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       cwd,
@@ -220,7 +224,7 @@ export class PiAcpSession {
         settingsManager,
         modelRuntime,
         modelRuntimeSignal: AbortSignal.timeout(15_000),
-        resourceLoaderOptions: { extensionFactories: [gate] },
+        resourceLoaderOptions: { extensionFactories: [gate], eventBus: this.eventBus },
       });
       const customTools: ToolDefinition[] = [createPlanTool(), ...mcp.tools];
       if (settings.delegation) {
@@ -380,6 +384,19 @@ export class PiAcpSession {
   private onSessionEvent(event: AgentSessionEvent): void {
     for (const update of this.projection.onEvent(event)) this.emit(update);
     if (event.type === "agent_settled") this.settle();
+  }
+
+  private onExtensionEvent(channel: string, data: unknown): void {
+    const facts = describeExtensionEvent(channel, data);
+    this.emit({
+      sessionUpdate: "session_info_update",
+      _meta: piMeta({ event: "extension_event", inferred: true, ...facts }),
+    });
+  }
+
+  /** Deliver an ACP-originated event to extensions (`_pi/emit_event`). */
+  injectExtensionEvent(channel: string, data: unknown): void {
+    this.eventBus?.inject(channel, data);
   }
 
   // ------------------------------------------------------------------ //

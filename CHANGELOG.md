@@ -23,5 +23,6 @@ Initial release: a full-featured ACP adapter for pi, in-process on the pi SDK.
   `terminal_output_delta` display terminals
 - Diff `diffStats` + add/update kind, per-turn `file_changes` report, typed `failure` notices
 - `/mcp`, `/skills`, `/rename`; `commandAction` hints on state commands; legacy `session/set_model`
+- Extension event bus forwarded as `extension_event` (inferred phase + correlation id); `_pi/emit_event`
 - `_session/steering` and `_pi/trust_project` extension methods
 - Adapter slash commands plus pi prompt templates, skills, and extension commands
