@@ -183,6 +183,34 @@ export function editOldTexts(args: unknown): string[] {
   return out;
 }
 
+export interface DiffStats {
+  added: number;
+  removed: number;
+}
+
+/**
+ * Line counts for a change. Lines are matched as a multiset (moves count as
+ * remove + add), which is O(n) and matches what review UIs display for
+ * add/delete badges closely enough.
+ */
+export function diffStats(oldText: string | null, newText: string): DiffStats {
+  const split = (text: string): string[] => (text.length === 0 ? [] : text.replace(/\n$/, "").split("\n"));
+  const newLines = split(newText);
+  if (oldText === null) return { added: newLines.length, removed: 0 };
+  const oldLines = split(oldText);
+  const counts = new Map<string, number>();
+  for (const line of oldLines) counts.set(line, (counts.get(line) ?? 0) + 1);
+  let added = 0;
+  for (const line of newLines) {
+    const remaining = counts.get(line) ?? 0;
+    if (remaining > 0) counts.set(line, remaining - 1);
+    else added += 1;
+  }
+  let removed = 0;
+  for (const remaining of counts.values()) removed += remaining;
+  return { added, removed };
+}
+
 export function fenceShellOutput(text: string): string {
   const trimmed = text.replace(/\n+$/, "");
   return trimmed.length === 0 ? "" : `\`\`\`sh\n${trimmed}\n\`\`\`\n`;

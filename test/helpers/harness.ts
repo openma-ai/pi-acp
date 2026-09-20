@@ -25,11 +25,13 @@ import {
   InMemoryCredentialStore,
   type FauxProviderHandle,
   type FauxResponseStep,
+  type Provider,
 } from "@earendil-works/pi-ai";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiAcpAgent } from "../../src/acp/agent.ts";
+import { RequestIdTracker, tapRequestIds } from "../../src/acp/request-ids.ts";
 import { resolveSettings, type Settings } from "../../src/settings.ts";
 
 export { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall };
@@ -54,6 +56,8 @@ export interface HarnessOptions {
   ) => CreateElicitationResponse | Promise<CreateElicitationResponse>;
   readTextFile?: Client["readTextFile"];
   writeTextFile?: Client["writeTextFile"];
+  /** Extra native providers registered on the model runtime before connecting. */
+  providers?: Provider[];
 }
 
 export class Harness {
@@ -66,6 +70,8 @@ export class Harness {
   readonly notifications: SessionNotification[] = [];
   readonly permissionRequests: RequestPermissionRequest[] = [];
   readonly elicitations: CreateElicitationRequest[] = [];
+  readonly completedElicitations: string[] = [];
+  readonly extNotifications: { method: string; params: Record<string, unknown> }[] = [];
   client!: ClientSideConnection;
   agent!: PiAcpAgent;
   private agentConn!: AgentSideConnection;
@@ -80,7 +86,10 @@ export class Harness {
     mkdirSync(this.agentDir, { recursive: true });
     mkdirSync(this.workspace, { recursive: true });
     mkdirSync(this.sessionDir, { recursive: true });
-    writeFileSync(join(this.agentDir, "settings.json"), JSON.stringify({ quietStartup: true }));
+    writeFileSync(
+      join(this.agentDir, "settings.json"),
+      JSON.stringify({ quietStartup: true, retry: { enabled: false } }),
+    );
     this.faux = faux;
     this.modelRuntime = modelRuntime;
   }
@@ -99,6 +108,7 @@ export class Harness {
       refreshOnCreate: true,
     });
     modelRuntime.registerNativeProvider(faux.provider);
+    for (const provider of options.providers ?? []) modelRuntime.registerNativeProvider(provider);
     await modelRuntime.refresh({ allowNetwork: false });
     const harness = new Harness(options, faux, modelRuntime);
     harness.connect();
@@ -115,10 +125,14 @@ export class Harness {
       model: "faux/faux-1",
       ...this.options.settings,
     };
-    this.agentConn = new AgentSideConnection((conn) => {
-      this.agent = new PiAcpAgent(conn, { settings, modelRuntime: this.modelRuntime });
-      return this.agent;
-    }, agentStream);
+    const requestIds = new RequestIdTracker();
+    this.agentConn = new AgentSideConnection(
+      (conn) => {
+        this.agent = new PiAcpAgent(conn, { settings, modelRuntime: this.modelRuntime, requestIds });
+        return this.agent;
+      },
+      tapRequestIds(agentStream, requestIds),
+    );
     const harness = this;
     this.client = new ClientSideConnection(
       (): Client => ({
@@ -134,6 +148,12 @@ export class Harness {
           harness.elicitations.push(params);
           if (harness.options.onElicitation !== undefined) return harness.options.onElicitation(params);
           return { action: "cancel" };
+        },
+        async completeElicitation(params) {
+          harness.completedElicitations.push(params.elicitationId);
+        },
+        async extNotification(method, params) {
+          harness.extNotifications.push({ method, params });
         },
         ...(harness.options.readTextFile !== undefined ? { readTextFile: harness.options.readTextFile } : {}),
         ...(harness.options.writeTextFile !== undefined

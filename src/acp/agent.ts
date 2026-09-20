@@ -37,30 +37,52 @@ import { isAbsolute } from "node:path";
 import { errorMessage, logDebug, logWarn } from "../log.ts";
 import type { Settings } from "../settings.ts";
 import { AGENT_NAME, AGENT_TITLE, VERSION } from "../version.ts";
+import { AuthFlowCancelled, createAcpAuthInteraction } from "./auth-interaction.ts";
+import {
+  AUTH_STATUS_META_KEY,
+  AUTH_STATUS_UPDATE_METHOD,
+  computeAuthStatus,
+  sameAuthStatus,
+  type AuthStatus,
+} from "./auth-status.ts";
 import {
   apiKeyFromAuthenticate,
   buildAuthMethods,
-  providerFromAuthMethodId,
+  parseAuthMethodId,
   TERMINAL_AUTH_METHOD_ID,
+  type AuthMethodOptions,
 } from "./auth.ts";
 import { runBuiltinCommand } from "./builtin-commands.ts";
 import { isBuiltinCommand, parseSlashCommand } from "./commands.ts";
-import { CONFIG_AUTO_COMPACTION, CONFIG_MODE, CONFIG_MODEL, CONFIG_THINKING } from "./config-options.ts";
+import {
+  CONFIG_AUTO_COMPACTION,
+  CONFIG_MODE,
+  CONFIG_MODEL,
+  CONFIG_THINKING,
+  parseBooleanOptionValue,
+} from "./config-options.ts";
 import { delegationFromClient } from "./delegation.ts";
 import { authRequired, internalError, invalidParams } from "./errors.ts";
 import { piMeta, readPiMeta } from "./meta.ts";
 import { isPermissionMode } from "./permissions.ts";
 import { convertPrompt, UnsupportedPromptContentError } from "./prompt.ts";
+import type { RequestIdTracker } from "./request-ids.ts";
 import { PiAcpSession, type ClientFeatures } from "./session.ts";
 import { findSession, listSessions, toAcpSessionInfo } from "./sessions-index.ts";
 import { buildStartupInfo } from "./startup-info.ts";
 
 const LIST_PAGE_SIZE = 100;
+/** Upper bound for an interactive provider login (browser round trip, device code polling). */
+const AUTH_FLOW_TIMEOUT_MS = 10 * 60 * 1000;
+/** Legacy extension method some clients still send instead of `session/set_config_option`. */
+const LEGACY_SET_MODEL_METHOD = "session/set_model";
 
 export interface PiAcpAgentOptions {
   settings: Settings;
   /** Injected for tests; created from the agent dir otherwise. */
   modelRuntime?: ModelRuntime;
+  /** Inbound request ids (needed for request-scoped elicitation during `authenticate`). */
+  requestIds?: RequestIdTracker;
 }
 
 export class PiAcpAgent implements AcpAgent {
@@ -69,18 +91,50 @@ export class PiAcpAgent implements AcpAgent {
   private readonly sessions = new Map<string, PiAcpSession>();
   private readonly opening = new Map<string, Promise<PiAcpSession>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
+  private readonly requestIds: RequestIdTracker | undefined;
   private features: ClientFeatures = {
-    terminalOutput: false,
+    terminalOutput: "none",
     formElicitation: false,
+    urlElicitation: false,
+    booleanConfigOptions: false,
     delegation: { readTextFile: false, writeTextFile: false, terminal: false },
   };
   private terminalAuthMeta = false;
+  private lastAuthStatus: AuthStatus | undefined;
   private closed = false;
 
   constructor(conn: AgentSideConnection, options: PiAcpAgentOptions) {
     this.conn = conn;
     this.settings = options.settings;
+    this.requestIds = options.requestIds;
     if (options.modelRuntime !== undefined) this.modelRuntimePromise = Promise.resolve(options.modelRuntime);
+  }
+
+  private authMethodOptions(): AuthMethodOptions {
+    return {
+      terminalAuthMeta: this.terminalAuthMeta,
+      urlElicitation: this.features.urlElicitation,
+      formElicitation: this.features.formElicitation,
+    };
+  }
+
+  /** Push `_auth/status_update` when pi's credential picture changed since the last push. */
+  private async publishAuthStatus(): Promise<void> {
+    if (this.closed) return;
+    let modelRuntime: ModelRuntime;
+    try {
+      modelRuntime = await this.modelRuntime();
+    } catch {
+      return;
+    }
+    const status = computeAuthStatus(modelRuntime);
+    if (sameAuthStatus(this.lastAuthStatus, status)) return;
+    this.lastAuthStatus = status;
+    try {
+      await this.conn.extNotification(AUTH_STATUS_UPDATE_METHOD, { authStatus: status });
+    } catch (error: unknown) {
+      logDebug(`${AUTH_STATUS_UPDATE_METHOD} failed: ${errorMessage(error)}`);
+    }
   }
 
   get agentDir(): string {
@@ -201,7 +255,7 @@ export class PiAcpAgent implements AcpAgent {
       pi.model === undefined || available.length === 0
         ? "no model is available: log in with pi (terminal auth) or provide an API key"
         : `no credentials for provider "${pi.model.provider}": log in with pi or provide an API key`,
-      { authMethods: buildAuthMethods(modelRuntime, this.terminalAuthMeta) },
+      { authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()) },
     );
   }
 
@@ -222,9 +276,17 @@ export class PiAcpAgent implements AcpAgent {
   async initialize(params: InitializeRequest): Promise<InitializeResponse> {
     const caps = params.clientCapabilities;
     const meta = (caps as { _meta?: Record<string, unknown> } | undefined)?._meta;
+    const present = (value: unknown): boolean => value !== undefined && value !== null;
     this.features = {
-      terminalOutput: meta?.["terminal_output"] === true,
-      formElicitation: caps?.elicitation?.form !== undefined && caps.elicitation.form !== null,
+      terminalOutput:
+        meta?.["terminal_output"] === true
+          ? "terminal_output"
+          : meta?.["terminal_output_delta"] === true
+            ? "terminal_output_delta"
+            : "none",
+      formElicitation: present(caps?.elicitation?.form),
+      urlElicitation: present(caps?.elicitation?.url),
+      booleanConfigOptions: present(caps?.session?.configOptions?.boolean),
       delegation: this.settings.delegation
         ? delegationFromClient(caps)
         : { readTextFile: false, writeTextFile: false, terminal: false },
@@ -237,7 +299,7 @@ export class PiAcpAgent implements AcpAgent {
       logWarn(`model runtime unavailable at initialize: ${errorMessage(error)}`);
     }
     const requested = params.protocolVersion;
-    return {
+    const response: InitializeResponse = {
       protocolVersion:
         typeof requested === "number" && requested >= 1 && requested < PROTOCOL_VERSION
           ? requested
@@ -249,24 +311,44 @@ export class PiAcpAgent implements AcpAgent {
         mcpCapabilities: { http: true, sse: false },
         sessionCapabilities: { list: {}, delete: {}, fork: {}, resume: {}, close: {} },
         auth: { logout: {} },
-        _meta: piMeta({ version: VERSION, delegation: this.features.delegation }),
+        _meta: {
+          ...piMeta({ version: VERSION, delegation: this.features.delegation }),
+          // Presence announces that this agent pushes `_auth/status_update`.
+          [AUTH_STATUS_META_KEY]: {},
+        },
       },
-      authMethods: buildAuthMethods(modelRuntime, this.terminalAuthMeta),
+      authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()),
       _meta: { steering: { supported: true } },
     };
+    // After the response: clients ignore notifications that arrive before it.
+    setTimeout(() => void this.publishAuthStatus(), 0);
+    return response;
   }
 
   async authenticate(params: AuthenticateRequest): Promise<void> {
+    try {
+      await this.runAuthenticate(params);
+    } finally {
+      void this.publishAuthStatus();
+    }
+  }
+
+  private async runAuthenticate(params: AuthenticateRequest): Promise<void> {
+    const modelRuntime = await this.modelRuntime();
     if (params.methodId === TERMINAL_AUTH_METHOD_ID) {
       // Terminal auth runs out of band (`--terminal-login`); refresh what pi stored.
-      const modelRuntime = await this.modelRuntime();
       await modelRuntime.refresh({ allowNetwork: false });
       return;
     }
     const submitted = apiKeyFromAuthenticate(params._meta);
-    const provider = submitted.provider ?? providerFromAuthMethodId(params.methodId);
+    const parsed = parseAuthMethodId(params.methodId);
+    const provider = submitted.provider ?? parsed?.provider;
     if (provider === undefined) throw invalidParams(`unknown auth method: ${params.methodId}`);
-    const modelRuntime = await this.modelRuntime();
+
+    if (parsed?.type === "oauth" && submitted.apiKey === undefined) {
+      await this.oauthLogin(modelRuntime, provider);
+      return;
+    }
     if (submitted.apiKey === undefined) {
       if (modelRuntime.hasConfiguredAuth(provider)) return;
       throw authRequired(`authenticate ${params.methodId} requires _meta["api-key"].apiKey`);
@@ -285,6 +367,40 @@ export class PiAcpAgent implements AcpAgent {
     }
   }
 
+  /** Run pi's provider OAuth flow, delivering URLs/codes/prompts through ACP elicitation. */
+  private async oauthLogin(modelRuntime: ModelRuntime, provider: string): Promise<void> {
+    if (modelRuntime.getProvider(provider)?.auth.oauth === undefined)
+      throw invalidParams(`provider "${provider}" has no OAuth login`);
+    const requestId = this.requestIds?.latestFor("authenticate");
+    if (requestId === undefined)
+      throw internalError("OAuth login needs the authenticate request id (request tracking is not wired)");
+    if (!this.features.urlElicitation && !this.features.formElicitation)
+      throw authRequired("OAuth login needs a client that supports URL or form elicitation");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AUTH_FLOW_TIMEOUT_MS);
+    const interaction = createAcpAuthInteraction({
+      conn: this.conn,
+      requestId,
+      provider,
+      urlElicitation: this.features.urlElicitation,
+      formElicitation: this.features.formElicitation,
+      signal: controller.signal,
+    });
+    try {
+      await modelRuntime.login(provider, "oauth", interaction);
+    } catch (error: unknown) {
+      if (error instanceof AuthFlowCancelled || controller.signal.aborted) {
+        throw authRequired(`login with ${provider} was cancelled`);
+      }
+      throw authRequired(`login with ${provider} failed: ${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      await interaction.finish();
+    }
+    await modelRuntime.refresh({ allowNetwork: false });
+  }
+
   async logout(_params: LogoutRequest): Promise<void> {
     const modelRuntime = await this.modelRuntime();
     const credentials = await modelRuntime.listCredentials();
@@ -295,6 +411,7 @@ export class PiAcpAgent implements AcpAgent {
         logWarn(`logout ${credential.providerId} failed: ${errorMessage(error)}`);
       }
     }
+    void this.publishAuthStatus();
   }
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
@@ -527,15 +644,8 @@ export class PiAcpAgent implements AcpAgent {
         break;
       }
       case CONFIG_AUTO_COMPACTION: {
-        const enabled =
-          typeof value === "boolean"
-            ? value
-            : value === "true"
-              ? true
-              : value === "false"
-                ? false
-                : undefined;
-        if (enabled === undefined) throw invalidParams("auto_compaction must be a boolean");
+        const enabled = parseBooleanOptionValue(value);
+        if (enabled === undefined) throw invalidParams("auto_compaction must be a boolean or on/off");
         session.session.setAutoCompactionEnabled(enabled);
         break;
       }
@@ -548,7 +658,21 @@ export class PiAcpAgent implements AcpAgent {
   async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (method === "_session/steering") return this.steering(params);
     if (method === "_pi/trust_project") return this.trustProject(params);
+    if (method === LEGACY_SET_MODEL_METHOD) return this.legacySetModel(params);
     throw RequestError.methodNotFound(method);
+  }
+
+  /** `session/set_model` (pre-config-option clients): `{ sessionId, modelId }`. */
+  private async legacySetModel(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const sessionId = params["sessionId"];
+    const modelId = params["modelId"];
+    if (typeof sessionId !== "string" || typeof modelId !== "string")
+      throw invalidParams(`${LEGACY_SET_MODEL_METHOD} requires sessionId and modelId`);
+    const session = await this.requireOrRestore(sessionId);
+    if (session.isRunning) throw invalidParams("cannot switch models while a turn is running");
+    await session.setModel(modelId);
+    session.publishConfigOptions();
+    return {};
   }
 
   /** `_session/steering`: inject into the running turn; never starts a detached turn. */

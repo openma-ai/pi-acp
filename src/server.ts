@@ -5,6 +5,7 @@
 import { AgentSideConnection, ndJsonStream, type Stream } from "@agentclientprotocol/sdk";
 import { Readable, Writable } from "node:stream";
 import { PiAcpAgent, type PiAcpAgentOptions } from "./acp/agent.ts";
+import { RequestIdTracker, tapRequestIds } from "./acp/request-ids.ts";
 import { errorMessage, logWarn } from "./log.ts";
 
 export interface ServerHandle {
@@ -22,10 +23,11 @@ export function stdioStream(): Stream {
 }
 
 export function serve(options: PiAcpAgentOptions & { stream?: Stream }): ServerHandle {
-  const stream = options.stream ?? stdioStream();
+  const requestIds = new RequestIdTracker();
+  const stream = tapRequestIds(options.stream ?? stdioStream(), requestIds);
   let agent!: PiAcpAgent;
   const connection = new AgentSideConnection((conn) => {
-    agent = new PiAcpAgent(conn, options);
+    agent = new PiAcpAgent(conn, { ...options, requestIds });
     return agent;
   }, stream);
   const closed = connection.closed

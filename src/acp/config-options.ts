@@ -32,7 +32,25 @@ export function findModel(models: readonly Model<string>[], value: string): Mode
   return fuzzy.length === 1 ? fuzzy[0] : undefined;
 }
 
-export function buildConfigOptions(session: AgentSession, mode: PermissionMode): SessionConfigOption[] {
+export interface ConfigOptionSurface {
+  /** Client advertised `session.configOptions.boolean`; otherwise booleans degrade to selects. */
+  booleanOptions: boolean;
+}
+
+export function parseBooleanOptionValue(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const lowered = value.toLowerCase();
+  if (["true", "on", "enabled", "1"].includes(lowered)) return true;
+  if (["false", "off", "disabled", "0"].includes(lowered)) return false;
+  return undefined;
+}
+
+export function buildConfigOptions(
+  session: AgentSession,
+  mode: PermissionMode,
+  surface: ConfigOptionSurface = { booleanOptions: true },
+): SessionConfigOption[] {
   const options: SessionConfigOption[] = [
     {
       type: "select",
@@ -110,14 +128,25 @@ export function buildConfigOptions(session: AgentSession, mode: PermissionMode):
     }
   }
 
-  options.push({
-    type: "boolean",
+  const autoCompaction = {
     id: CONFIG_AUTO_COMPACTION,
     name: "Auto-compaction",
     category: "model_config",
     description: "Summarize context automatically when it nears the model's window",
-    currentValue: session.autoCompactionEnabled,
-  });
+  };
+  if (surface.booleanOptions) {
+    options.push({ type: "boolean", ...autoCompaction, currentValue: session.autoCompactionEnabled });
+  } else {
+    options.push({
+      type: "select",
+      ...autoCompaction,
+      currentValue: session.autoCompactionEnabled ? "on" : "off",
+      options: [
+        { value: "on", name: "On" },
+        { value: "off", name: "Off" },
+      ],
+    });
+  }
 
   return options;
 }

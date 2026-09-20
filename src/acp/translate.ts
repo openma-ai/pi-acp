@@ -23,6 +23,7 @@ import {
   absoluteToolPath,
   asRecord,
   classifyToolCall,
+  diffStats,
   editOldTexts,
   fenceShellOutput,
   findUniqueLineNumber,
@@ -40,12 +41,26 @@ export interface FileAccess {
   read(absolutePath: string): string | null;
 }
 
+/**
+ * How shell output reaches the client when pi runs the command itself:
+ * `terminal_output` / `terminal_output_delta` are the Zed/Codex display-terminal
+ * `_meta` extensions (same payload, different key); `none` fences the output as text.
+ */
+export type TerminalOutputMode = "terminal_output" | "terminal_output_delta" | "none";
+
 export interface ProjectionOptions {
   cwd: string;
-  /** Client renders `_meta.terminal_output` display terminals (Zed/Codex extension). */
-  terminalOutput?: boolean;
+  /** Display-terminal extension the client understands. Default `none`. */
+  terminalOutput?: TerminalOutputMode | boolean;
   /** Snapshot/read files for structured `diff` content on edit/write. */
   files?: FileAccess;
+}
+
+export interface FileChange {
+  path: string;
+  kind: "add" | "update";
+  added: number;
+  removed: number;
 }
 
 interface OpenToolCall {
@@ -74,6 +89,8 @@ interface PromptWindow {
   /** Assistant error captured for the prompt; cleared by a later successful message. */
   error: string | undefined;
   compactionSeq: number;
+  /** Files touched by edit/write during the prompt, keyed by absolute path. */
+  fileChanges: Map<string, FileChange>;
 }
 
 function emptyWindow(): PromptWindow {
@@ -83,6 +100,7 @@ function emptyWindow(): PromptWindow {
     lastAssistant: undefined,
     error: undefined,
     compactionSeq: 0,
+    fileChanges: new Map(),
   };
 }
 
@@ -102,7 +120,7 @@ export function assistantStopReasonToAcp(message: AssistantMessage | undefined):
 
 export class SessionProjection {
   private readonly cwd: string;
-  private readonly terminalOutput: boolean;
+  private readonly terminalMode: TerminalOutputMode;
   private readonly files: FileAccess | undefined;
   private readonly toolCalls = new Map<string, OpenToolCall>();
   private window: PromptWindow = emptyWindow();
@@ -113,8 +131,14 @@ export class SessionProjection {
 
   constructor(options: ProjectionOptions) {
     this.cwd = options.cwd;
-    this.terminalOutput = options.terminalOutput ?? false;
+    const mode = options.terminalOutput;
+    this.terminalMode =
+      mode === true ? "terminal_output" : mode === false || mode === undefined ? "none" : mode;
     this.files = options.files;
+  }
+
+  private terminalMeta(id: string, delta: string): Record<string, unknown> {
+    return { [this.terminalMode]: { terminal_id: id, data: delta } };
   }
 
   /**
@@ -152,6 +176,11 @@ export class SessionProjection {
 
   get plan(): PlanEntry[] | undefined {
     return this.lastPlan;
+  }
+
+  /** Files changed during the current prompt (edit/write with a readable result). */
+  fileChanges(): FileChange[] {
+    return [...this.window.fileChanges.values()];
   }
 
   promptUsage(): Usage | undefined {
@@ -430,7 +459,7 @@ export class SessionProjection {
     if (state.clientTerminalId !== undefined) {
       return { content: [{ type: "terminal", terminalId: state.clientTerminalId }] };
     }
-    if (this.terminalOutput && !state.displayTerminal) {
+    if (this.terminalMode !== "none" && !state.displayTerminal) {
       state.displayTerminal = true;
       return {
         content: [{ type: "terminal", terminalId: id }],
@@ -508,7 +537,7 @@ export class SessionProjection {
             sessionUpdate: "tool_call_update",
             toolCallId: id,
             status: "in_progress",
-            _meta: { terminal_output: { terminal_id: id, data: delta } },
+            _meta: this.terminalMeta(id, delta),
           },
         ];
       }
@@ -576,7 +605,7 @@ export class SessionProjection {
           status,
           rawOutput: result,
           _meta: {
-            ...(delta.length > 0 ? { terminal_output: { terminal_id: id, data: delta } } : {}),
+            ...(delta.length > 0 ? this.terminalMeta(id, delta) : {}),
             terminal_exit: { terminal_id: id, exit_code: exitCode, signal: null },
           },
         });
@@ -615,11 +644,21 @@ export class SessionProjection {
     if (isFileMutationTool(name) && !isError && state.snapshot !== undefined && this.files !== undefined) {
       const newText = this.files.read(state.snapshot.path);
       if (newText !== null && (state.snapshot.oldText === null || newText !== state.snapshot.oldText)) {
+        const stats = diffStats(state.snapshot.oldText, newText);
+        const kind = state.snapshot.oldText === null ? "add" : "update";
         content.push({
           type: "diff",
           path: state.snapshot.path,
           ...(state.snapshot.oldText !== null ? { oldText: state.snapshot.oldText } : {}),
           newText,
+          _meta: piMeta({ fileChange: kind, diffStats: stats }),
+        });
+        const previous = this.window.fileChanges.get(state.snapshot.path);
+        this.window.fileChanges.set(state.snapshot.path, {
+          path: state.snapshot.path,
+          kind: previous?.kind === "add" ? "add" : kind,
+          added: (previous?.added ?? 0) + stats.added,
+          removed: (previous?.removed ?? 0) + stats.removed,
         });
       }
       const firstChangedLine = details["firstChangedLine"];

@@ -17,6 +17,11 @@ Initial release: a full-featured ACP adapter for pi, in-process on the pi SDK.
 - MCP servers (stdio + streamable HTTP) mounted as `mcp__<server>__<tool>`
 - Client delegation: `fs/read_text_file`, `fs/write_text_file`, `terminal/*`
 - Extension UI over ACP: form elicitation with permission-request fallback
-- Auth: terminal login through pi, per-provider API-key methods, `logout`
+- Auth: terminal login through pi, per-provider API-key methods, provider OAuth flows over
+  URL/form elicitation, `_auth/status_update` pushes, `logout`
+- Capability gating: boolean config options → select fallback, `terminal_output` /
+  `terminal_output_delta` display terminals
+- Diff `diffStats` + add/update kind, per-turn `file_changes` report, typed `failure` notices
+- `/mcp`, `/skills`, `/rename`; `commandAction` hints on state commands; legacy `session/set_model`
 - `_session/steering` and `_pi/trust_project` extension methods
 - Adapter slash commands plus pi prompt templates, skills, and extension commands

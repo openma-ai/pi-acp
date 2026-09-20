@@ -62,8 +62,9 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `session/close`, `session/delete`, session titles, and silent restore when a client prompts
   a session the agent process forgot.
 - **Slash commands** — adapter built-ins (`/status`, `/model`, `/thinking`, `/mode`, `/compact`,
-  `/autocompact`, `/name`, `/session`, `/export`, `/tools`, `/steering`, `/follow-up`, `/queue`,
-  `/bash`, `/reload`, `/changelog`) plus pi prompt templates, `/skill:<name>`, and extension
+  `/autocompact`, `/name`, `/rename`, `/session`, `/export`, `/tools`, `/mcp`, `/skills`,
+  `/steering`, `/follow-up`, `/queue`, `/bash`, `/reload`, `/changelog`) plus pi prompt
+  templates, `/skill:<name>`, and extension
   commands — all advertised through `available_commands_update`.
 - **MCP servers** — per-session `mcpServers` (stdio + streamable HTTP) mount as pi tools named
   `mcp__<server>__<tool>`; a failing server is reported, never fatal.
@@ -80,8 +81,13 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
 - **Real cancellation** — `session/cancel` aborts the turn, queued messages, bash, compaction,
   and retries.
 - **Auth** — terminal auth (`openma-pi-acp --terminal-login` runs pi so you can `/login`),
-  per-provider `api-key:<provider>` methods that store keys in pi's credential store, and
+  per-provider `api-key:<provider>` methods that store keys in pi's credential store,
+  `oauth:<provider>` methods that run pi's browser/device-code OAuth flows through ACP
+  elicitation (Anthropic, OpenAI Codex, GitHub Copilot, …), `_auth/status_update` pushes, and
   `logout`.
+- **Capability-aware** — boolean config options degrade to selects, display terminals follow
+  `terminal_output` / `terminal_output_delta`, diffs carry `diffStats` and add/update kind, each
+  turn ends with a file-change summary, and failed turns carry a typed failure kind.
 
 ## Configuration
 

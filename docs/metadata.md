@@ -12,14 +12,17 @@ the spelling of the external contract they implement (`terminal_output`,
 
 The adapter reads these paths from `initialize.params.clientCapabilities`:
 
-| Path                                        | Type           | Effect                                                                                                              |
-| ------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `clientCapabilities._meta.terminal_output`  | literal `true` | Shell tool calls carry a display terminal (`terminal_info`/`terminal_output`/`terminal_exit`). Codex/Zed extension. |
-| `clientCapabilities._meta["terminal-auth"]` | literal `true` | Adds Zed's `_meta["terminal-auth"]` launch spec to the terminal auth method.                                        |
-| `clientCapabilities.fs.readTextFile`        | `true`         | pi's `read`/`edit` read through `fs/read_text_file` (unsaved editor buffers).                                       |
-| `clientCapabilities.fs.writeTextFile`       | `true`         | pi's `edit`/`write` write through `fs/write_text_file`.                                                             |
-| `clientCapabilities.terminal`               | `true`         | pi's `bash` runs in a client terminal (`terminal/create`, streamed by the client).                                  |
-| `clientCapabilities.elicitation.form`       | object         | Extension dialogs (`select`/`confirm`/`input`/`editor`) become `elicitation/create` forms.                          |
+| Path                                               | Type           | Effect                                                                                                                        |
+| -------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `clientCapabilities._meta.terminal_output`         | literal `true` | Shell tool calls carry a display terminal (`terminal_info`/`terminal_output`/`terminal_exit`). Codex/Zed extension.           |
+| `clientCapabilities._meta["terminal-auth"]`        | literal `true` | Adds Zed's `_meta["terminal-auth"]` launch spec to the terminal auth method.                                                  |
+| `clientCapabilities._meta.terminal_output_delta`   | literal `true` | Same as `terminal_output` with the streaming key spelled `terminal_output_delta` (newer Codex convention).                    |
+| `clientCapabilities.elicitation.url`               | object         | OAuth logins open the browser URL through `elicitation/create` `mode: "url"`; `oauth:<provider>` auth methods are advertised. |
+| `clientCapabilities.session.configOptions.boolean` | object         | `auto_compaction` is a `boolean` option; without it, a `select` with `on`/`off`.                                              |
+| `clientCapabilities.fs.readTextFile`               | `true`         | pi's `read`/`edit` read through `fs/read_text_file` (unsaved editor buffers).                                                 |
+| `clientCapabilities.fs.writeTextFile`              | `true`         | pi's `edit`/`write` write through `fs/write_text_file`.                                                                       |
+| `clientCapabilities.terminal`                      | `true`         | pi's `bash` runs in a client terminal (`terminal/create`, streamed by the client).                                            |
+| `clientCapabilities.elicitation.form`              | object         | Extension dialogs (`select`/`confirm`/`input`/`editor`) become `elicitation/create` forms.                                    |
 
 The initialize response carries:
 
@@ -40,12 +43,16 @@ The initialize response carries:
 `delegation` reports which client capabilities the adapter actually wired
 (`--no-delegation` forces all three to `false`).
 
+`agentCapabilities._meta.authStatus: {}` announces that the agent pushes the
+`_auth/status_update` notification (see below).
+
 ## Authentication metadata
 
-| Method               | Advertised metadata                                                                                   | Meaning                                                               |
-| -------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `pi-terminal-login`  | `_meta["terminal-auth"] = { command, args, label }` (only when the client advertised `terminal-auth`) | Launch `openma-pi-acp --terminal-login`, which runs pi interactively. |
-| `api-key:<provider>` | `_meta["api-key"].provider: string`                                                                   | Provide an API key for one pi provider.                               |
+| Method               | Advertised metadata                                                                                   | Meaning                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `pi-terminal-login`  | `_meta["terminal-auth"] = { command, args, label }` (only when the client advertised `terminal-auth`) | Launch `openma-pi-acp --terminal-login`, which runs pi interactively.                                            |
+| `api-key:<provider>` | `_meta["api-key"].provider: string`                                                                   | Provide an API key for one pi provider.                                                                          |
+| `oauth:<provider>`   | `_meta.piAcp.oauth: { provider, subscription }`                                                       | Run pi's provider OAuth flow over elicitation. Advertised only when the client supports URL or form elicitation. |
 
 An `authenticate` request for an API key:
 
@@ -97,17 +104,19 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
 
 `_meta.piAcp.event` discriminates metadata-only facts with no dedicated ACP update:
 
-| Event             | Fields                                                                                 |
-| ----------------- | -------------------------------------------------------------------------------------- |
-| `auto_retry`      | `phase: "start" \| "end"`, `attempt`, `maxAttempts?`, `delayMs?`, `success?`, `error?` |
-| `queue`           | `steering: string[]`, `followUp: string[]` — pi's pending queued messages              |
-| `status`          | `key`, `text` — an extension's status-bar text (`ctx.ui.setStatus`)                    |
-| `widget`          | `key`, `lines: string[] \| null`, `placement`                                          |
-| `editor_text`     | `text` — an extension asked to fill the editor                                         |
-| `extension_error` | `extensionPath`, `hook`, `error`                                                       |
-| `prompt_usage`    | `usage` (ACP `Usage`) — aggregate restored by history replay                           |
-| `custom_message`  | `customType`, `display`, `preview` — a pi custom message entry                         |
-| `branch_summary`  | `fromId`, `summary`                                                                    |
+| Event             | Fields                                                                                                                                                                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto_retry`      | `phase: "start" \| "end"`, `attempt`, `maxAttempts?`, `delayMs?`, `success?`, `error?`                                                                                                                                                             |
+| `queue`           | `steering: string[]`, `followUp: string[]` — pi's pending queued messages                                                                                                                                                                          |
+| `status`          | `key`, `text` — an extension's status-bar text (`ctx.ui.setStatus`)                                                                                                                                                                                |
+| `widget`          | `key`, `lines: string[] \| null`, `placement`                                                                                                                                                                                                      |
+| `editor_text`     | `text` — an extension asked to fill the editor                                                                                                                                                                                                     |
+| `extension_error` | `extensionPath`, `hook`, `error`                                                                                                                                                                                                                   |
+| `prompt_usage`    | `usage` (ACP `Usage`) — aggregate restored by history replay                                                                                                                                                                                       |
+| `custom_message`  | `customType`, `display`, `preview` — a pi custom message entry                                                                                                                                                                                     |
+| `branch_summary`  | `fromId`, `summary`                                                                                                                                                                                                                                |
+| `file_changes`    | `files: [{ path, kind: "add" \| "update", added, removed }]` — files edited during the turn, emitted once when the turn settles                                                                                                                    |
+| `failure`         | `kind: "auth_required" \| "rate_limited" \| "context_overflow" \| "network" \| "provider_error" \| "cancelled" \| "unknown"`, `message` — emitted before a failed `session/prompt` rejects; the error's `data.piAcp.failure` carries the same kind |
 
 A retry start also emits a visible italic `agent_message_chunk` with
 `_meta.piAcp.notice: "auto_retry"`; extension `notify()` calls emit a chunk with
@@ -118,7 +127,27 @@ A retry start also emits a visible italic `agent_message_chunk` with
 `compaction_update` carries `_meta.piAcp.reason` (`manual` / `threshold` /
 `overflow`) and `tokensBefore` on completion.
 
+### Diff metadata
+
+Every `diff` content block on `edit`/`write` tool results carries:
+
+```json
+{
+  "type": "diff",
+  "path": "/abs/file",
+  "oldText": "…",
+  "newText": "…",
+  "_meta": { "piAcp": { "fileChange": "update", "diffStats": { "added": 2, "removed": 1 } } }
+}
+```
+
+`fileChange` is `add` (file did not exist) or `update`; `diffStats` counts lines
+as a multiset (a moved line is one removal plus one addition).
+
 ### Display terminal metadata
+
+The streaming key is `terminal_output` or `terminal_output_delta`, matching what
+the client advertised.
 
 Emitted only when the client advertised `_meta.terminal_output` and the command
 is not delegated to a client terminal:
@@ -137,7 +166,10 @@ Entries in `available_commands_update` carry provenance:
 { "name": "deploy", "description": "…", "_meta": { "piAcp": { "source": "prompt", "path": "/…/deploy.md" } } }
 ```
 
-`source` is `extension`, `prompt`, or `skill`. Adapter built-ins carry no `_meta`.
+`source` is `extension`, `prompt`, or `skill`. Built-ins that change session
+state (`/mode`, `/model`, `/thinking`, `/autocompact`) carry the Codex-style
+display hint `_meta.commandAction = { kind: "setConfigOption", configId, presentation: "state" }`
+so clients can render them as state controls and refresh config options after use.
 
 ## Elicitation metadata
 

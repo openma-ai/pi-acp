@@ -8,6 +8,7 @@ import { getPackageDir, VERSION as PI_VERSION } from "@earendil-works/pi-coding-
 import { errorMessage } from "../log.ts";
 import { modelValue } from "./config-options.ts";
 import { isPermissionMode, PERMISSION_MODES } from "./permissions.ts";
+import { parseMcpToolName } from "./tool-facts.ts";
 import type { PiAcpSession } from "./session.ts";
 import { VERSION } from "../version.ts";
 
@@ -134,11 +135,41 @@ export async function runBuiltinCommand(
       pi.setAutoCompactionEnabled(requested);
       return { text: `auto-compaction ${requested ? "enabled" : "disabled"}`, refresh: { config: true } };
     }
-    case "name": {
+    case "name":
+    case "rename": {
       if (args.length === 0)
-        return { text: `session name: ${pi.sessionName ?? "(unset)"}\nusage: /name <name>` };
+        return { text: `session name: ${pi.sessionName ?? "(unset)"}\nusage: /${name} <name>` };
       pi.setSessionName(args);
       return { text: `session name → ${args}`, refresh: { title: args } };
+    }
+    case "mcp": {
+      const active = new Set(pi.getActiveToolNames());
+      const byServer = new Map<string, string[]>();
+      for (const tool of pi.getAllTools()) {
+        const parsed = parseMcpToolName(tool.name);
+        if (parsed === undefined) continue;
+        const list = byServer.get(parsed.server) ?? [];
+        list.push(`${active.has(tool.name) ? "[x]" : "[ ]"} ${parsed.tool}`);
+        byServer.set(parsed.server, list);
+      }
+      if (byServer.size === 0) return { text: "No MCP servers are mounted in this session." };
+      return {
+        text: [...byServer.entries()]
+          .map(([server, tools]) => [`**${server}**`, ...tools].join("\n"))
+          .join("\n\n"),
+      };
+    }
+    case "skills": {
+      const skills = pi.resourceLoader.getSkills().skills;
+      if (skills.length === 0) return { text: "No skills are available." };
+      const enabled = pi.settingsManager.getEnableSkillCommands();
+      return {
+        text: [
+          ...skills.map((skill) => `- **${skill.name}** — ${skill.description}`),
+          "",
+          enabled ? "invoke with /skill:<name> <instructions>" : "skill commands are disabled in pi settings",
+        ].join("\n"),
+      };
     }
     case "session": {
       const stats = pi.getSessionStats();

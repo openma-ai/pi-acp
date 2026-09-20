@@ -11,33 +11,53 @@ export interface BuiltinCommand extends AvailableCommand {
   description: string;
 }
 
+/**
+ * `_meta.commandAction`: a display hint (Codex convention) telling clients that a
+ * command mutates session state rather than starting a turn, so they can render
+ * it as a state control and refresh config options afterwards.
+ */
+function stateCommand(configId: string): { _meta: Record<string, unknown> } {
+  return { _meta: { commandAction: { kind: "setConfigOption", configId, presentation: "state" } } };
+}
+
 export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "status", description: "Show adapter, model, mode, and session status" },
   {
     name: "model",
     description: "List models or switch model",
     input: { hint: "[provider/model] — blank lists" },
+    ...stateCommand("model"),
   },
   {
     name: "thinking",
     description: "Show or set the thinking level",
     input: { hint: "off|minimal|low|medium|high|xhigh|max" },
+    ...stateCommand("thinking"),
   },
   {
     name: "mode",
     description: "Show or set the permission mode",
     input: { hint: "read-only|ask|full-access" },
+    ...stateCommand("mode"),
   },
   {
     name: "compact",
     description: "Compact the conversation context",
     input: { hint: "[custom instructions]" },
   },
-  { name: "autocompact", description: "Toggle automatic compaction", input: { hint: "on|off|toggle" } },
+  {
+    name: "autocompact",
+    description: "Toggle automatic compaction",
+    input: { hint: "on|off|toggle" },
+    ...stateCommand("auto_compaction"),
+  },
   { name: "name", description: "Set the session display name", input: { hint: "<name>" } },
+  { name: "rename", description: "Rename the current session", input: { hint: "<name>" } },
   { name: "session", description: "Show session statistics (messages, tokens, cost, file)" },
   { name: "export", description: "Export the session to HTML", input: { hint: "[output path]" } },
   { name: "tools", description: "List or set active tools", input: { hint: "[tool names…]" } },
+  { name: "mcp", description: "List the MCP servers and tools mounted in this session" },
+  { name: "skills", description: "List available skills" },
   {
     name: "steering",
     description: "Show or set steering delivery mode",

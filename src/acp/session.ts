@@ -41,7 +41,7 @@ import type { Settings } from "../settings.ts";
 import { availableCommandsFor } from "./commands.ts";
 import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
 import { createDelegatedTools, type DelegationCapabilities } from "./delegation.ts";
-import { authRequired, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
+import { authRequired, classifyFailure, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
 import { buildReplay } from "./history.ts";
 import { mountMcpServers, type McpMount } from "./mcp.ts";
 import { piMeta } from "./meta.ts";
@@ -54,14 +54,23 @@ import {
 } from "./permissions.ts";
 import { createPlanTool } from "./plan-tool.ts";
 import { classifyToolCall } from "./tool-facts.ts";
-import { assistantStopReasonToAcp, SessionProjection, type SessionUpdate } from "./translate.ts";
+import {
+  assistantStopReasonToAcp,
+  SessionProjection,
+  type SessionUpdate,
+  type TerminalOutputMode,
+} from "./translate.ts";
 import { createAcpUiContext } from "./ui-context.ts";
 
 export interface ClientFeatures {
-  /** `clientCapabilities._meta.terminal_output === true` (display terminals). */
-  terminalOutput: boolean;
+  /** Display-terminal `_meta` extension the client renders (`_meta.terminal_output[_delta]`). */
+  terminalOutput: TerminalOutputMode;
   /** `clientCapabilities.elicitation.form` present. */
   formElicitation: boolean;
+  /** `clientCapabilities.elicitation.url` present. */
+  urlElicitation: boolean;
+  /** `clientCapabilities.session.configOptions.boolean` present. */
+  booleanConfigOptions: boolean;
   delegation: DelegationCapabilities;
 }
 
@@ -140,7 +149,7 @@ export class PiAcpSession {
       cwd: options.cwd,
       // A delegated client terminal owns the presentation; the display-terminal
       // extension only applies when pi runs the command itself.
-      terminalOutput: options.features.terminalOutput && !options.features.delegation.terminal,
+      terminalOutput: options.features.delegation.terminal ? "none" : options.features.terminalOutput,
       files: { read: readFileOrNull },
     });
   }
@@ -399,7 +408,9 @@ export class PiAcpSession {
   // ------------------------------------------------------------------ //
 
   configOptions(): SessionConfigOption[] {
-    return buildConfigOptions(this.session, this.policy.mode);
+    return buildConfigOptions(this.session, this.policy.mode, {
+      booleanOptions: this.features.booleanConfigOptions,
+    });
   }
 
   modes(): ReturnType<typeof modeState> {
@@ -550,14 +561,32 @@ export class PiAcpSession {
     const inflight = this.inflight;
     if (inflight === undefined) return;
     this.inflight = undefined;
+    const changes = this.projection.fileChanges();
+    if (changes.length > 0) {
+      this.emit({
+        sessionUpdate: "session_info_update",
+        _meta: piMeta({ event: "file_changes", files: changes }),
+      });
+    }
+    const error = this.cancelled ? undefined : this.projection.promptError;
+    const failureKind = error !== undefined ? classifyFailure(error) : undefined;
+    if (error !== undefined && failureKind !== undefined) {
+      this.emit({
+        sessionUpdate: "session_info_update",
+        _meta: piMeta({ event: "failure", kind: failureKind, message: error }),
+      });
+    }
     void this.flush().finally(() => {
       if (this.cancelled) {
         inflight.resolve("cancelled");
         return;
       }
-      const error = this.projection.promptError;
       if (error !== undefined) {
-        inflight.reject(internalError(error, piMeta({ assistantError: true })));
+        inflight.reject(
+          failureKind === "auth_required"
+            ? authRequired(error, piMeta({ assistantError: true, failure: failureKind }))
+            : internalError(error, piMeta({ assistantError: true, failure: failureKind })),
+        );
         return;
       }
       inflight.resolve(assistantStopReasonToAcp(this.projection.lastAssistant));
