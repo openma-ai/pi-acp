@@ -39,7 +39,7 @@ export function modeState(current: PermissionMode): SessionModeState {
 }
 
 /** Tools that read only and never need gating. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "update_plan"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 export type ToolRisk = "read" | "mutate";
 

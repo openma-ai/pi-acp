@@ -8,7 +8,6 @@
 
 import type {
   ContentBlock,
-  PlanEntry,
   SessionNotification,
   StopReason,
   ToolCallContent,
@@ -18,7 +17,6 @@ import type {
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
 import { piMeta } from "./meta.ts";
-import { planEntriesFromArgs, PLAN_TOOL_NAME } from "./plan-tool.ts";
 import {
   absoluteToolPath,
   asRecord,
@@ -127,7 +125,6 @@ export class SessionProjection {
   private contextWindow: number | undefined;
   private messageSeq = 0;
   private currentMessageId: string | undefined;
-  private lastPlan: PlanEntry[] | undefined;
 
   constructor(options: ProjectionOptions) {
     this.cwd = options.cwd;
@@ -172,10 +169,6 @@ export class SessionProjection {
 
   get promptError(): string | undefined {
     return this.window.error;
-  }
-
-  get plan(): PlanEntry[] | undefined {
-    return this.lastPlan;
   }
 
   /** Files changed during the current prompt (edit/write with a readable result). */
@@ -618,22 +611,6 @@ export class SessionProjection {
         ...(text.length > 0
           ? { content: [{ type: "content", content: { type: "text", text: fenceShellOutput(text) } }] }
           : {}),
-        rawOutput: result,
-      });
-      return updates;
-    }
-
-    if (name === PLAN_TOOL_NAME) {
-      const entries = planEntriesFromArgs(state.args) ?? (details["entries"] as PlanEntry[] | undefined);
-      if (!isError && entries !== undefined) {
-        this.lastPlan = entries;
-        updates.push({ sessionUpdate: "plan", entries });
-      }
-      updates.push({
-        sessionUpdate: "tool_call_update",
-        toolCallId: id,
-        status,
-        ...(text.length > 0 ? { content: [{ type: "content", content: { type: "text", text } }] } : {}),
         rawOutput: result,
       });
       return updates;

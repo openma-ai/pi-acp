@@ -13,7 +13,6 @@ export {
 } from "./acp/permissions.ts";
 export { buildConfigOptions, findModel, modelValue } from "./acp/config-options.ts";
 export { BUILTIN_COMMANDS, availableCommandsFor, parseSlashCommand } from "./acp/commands.ts";
-export { createPlanTool, PLAN_TOOL_NAME, planEntriesFromArgs } from "./acp/plan-tool.ts";
 export { mountMcpServers, mcpToolName, sanitizeServerName } from "./acp/mcp.ts";
 export { buildAuthMethods, TERMINAL_AUTH_METHOD_ID } from "./acp/auth.ts";
 export { serve, stdioStream, type ServerHandle } from "./server.ts";

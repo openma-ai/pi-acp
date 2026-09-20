@@ -23,6 +23,8 @@ export default function (pi) {
       pi.events.emit("demo:job-update", { id: "job-1", progress: 50 });
       pi.events.emit("demo:job-complete", { runId: "job-1", results: [1, 2] });
       pi.events.emit("plain-ping", "hello");
+      pi.events.emit("acp:plan", { entries: [{ content: "first", status: "in_progress" }] });
+      pi.events.emit("acp:plan", "not a plan");
     },
   });
   pi.events.on("acp:ping", (data) => {
@@ -64,7 +66,13 @@ describe("extension events over ACP", () => {
       ["demo:job-update", "update", "job-1"],
       ["demo:job-complete", "completed", "job-1"],
       ["plain-ping", undefined, undefined],
+      ["acp:plan", undefined, undefined],
     ]);
+    const plan = harness.updatesFor(sessionId).find((u) => u.sessionUpdate === "plan");
+    expect(plan).toEqual({
+      sessionUpdate: "plan",
+      entries: [{ content: "first", status: "in_progress", priority: "medium" }],
+    });
     expect(events[0]).toMatchObject({
       inferred: true,
       namespace: "demo",

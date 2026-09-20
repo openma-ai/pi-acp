@@ -174,22 +174,7 @@ describe("permissions", () => {
   });
 });
 
-describe("plans and slash commands", () => {
-  it("publishes plan updates from update_plan", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
-    await harness.initialize();
-    const sessionId = await harness.newSession();
-    harness.respond(
-      fauxAssistantMessage([
-        fauxToolCall("update_plan", { entries: [{ content: "step one", status: "in_progress" }] }),
-      ]),
-      fauxAssistantMessage("planned"),
-    );
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "plan" }] });
-    const plan = harness.updatesFor(sessionId).find((u) => u.sessionUpdate === "plan");
-    expect(plan).toMatchObject({ entries: [{ content: "step one", status: "in_progress" }] });
-  });
-
+describe("slash commands", () => {
   it("runs adapter commands without a model turn", async () => {
     harness = await Harness.create();
     await harness.initialize();

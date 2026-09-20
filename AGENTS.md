@@ -11,7 +11,7 @@
 - `src/acp/translate.ts` — pure projection of pi `AgentSessionEvent`s onto
   `session/update`. `src/acp/history.ts` — pure `session/load` replay.
 - `src/acp/permissions.ts`, `config-options.ts`, `commands.ts`,
-  `builtin-commands.ts`, `ui-context.ts`, `delegation.ts`, `mcp.ts`, `plan-tool.ts`
+  `builtin-commands.ts`, `ui-context.ts`, `delegation.ts`, `mcp.ts`, `extension-events.ts`
   — one concern each.
 - `docs/metadata.md` is the registry for every `_meta` field; update it with
   any wire change.
@@ -37,6 +37,9 @@ npm test
 npm run build
 npm run format
 ```
+
+Do not add tools or semantics pi does not have; extensions declare ACP semantics
+themselves over `acp:*` event channels.
 
 Do not commit or publish unless asked. Patch releases only unless the
 maintainer approves a minor bump.

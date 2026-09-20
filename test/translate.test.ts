@@ -171,32 +171,6 @@ describe("SessionProjection streaming", () => {
     });
   });
 
-  it("emits a plan from the update_plan tool", () => {
-    const p = projection();
-    const args = {
-      entries: [
-        { content: "a", status: "in_progress" },
-        { content: "b", status: "pending", priority: "high" },
-      ],
-    };
-    p.onEvent({ type: "tool_execution_start", toolCallId: "p1", toolName: "update_plan", args });
-    const end = p.onEvent({
-      type: "tool_execution_end",
-      toolCallId: "p1",
-      toolName: "update_plan",
-      result: { content: [] },
-      isError: false,
-    });
-    expect(end[0]).toEqual({
-      sessionUpdate: "plan",
-      entries: [
-        { content: "a", status: "in_progress", priority: "medium" },
-        { content: "b", status: "pending", priority: "high" },
-      ],
-    });
-    expect(p.plan).toHaveLength(2);
-  });
-
   it("accumulates usage per prompt and emits usage_update with context size", () => {
     const p = projection();
     p.setContextWindow(1000);

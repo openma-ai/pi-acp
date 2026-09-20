@@ -35,7 +35,6 @@ describe("classifyToolCall", () => {
     });
     expect(classifyToolCall("find", { pattern: "*.ts" }, "/w").kind).toBe("search");
     expect(classifyToolCall("ls", { path: "." }, "/w").kind).toBe("search");
-    expect(classifyToolCall("update_plan", {}, "/w")).toMatchObject({ kind: "think", title: "Update plan" });
   });
 
   it("labels MCP tools by server and uses name heuristics", () => {

@@ -22,7 +22,7 @@ function entry(id: string, message: unknown): SessionEntry {
 }
 
 describe("buildReplay", () => {
-  it("replays user, assistant, tool, and plan history in order", () => {
+  it("replays user, assistant, and tool history in order", () => {
     const entries: SessionEntry[] = [
       entry("1", { role: "user", content: "hi", timestamp: 0 }),
       entry("2", {
@@ -31,12 +31,6 @@ describe("buildReplay", () => {
           { type: "thinking", thinking: "t" },
           { type: "text", text: "run" },
           { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } },
-          {
-            type: "toolCall",
-            id: "p1",
-            name: "update_plan",
-            arguments: { entries: [{ content: "step", status: "completed" }] },
-          },
         ],
         api: "faux",
         provider: "faux",
@@ -53,15 +47,7 @@ describe("buildReplay", () => {
         isError: false,
         timestamp: 0,
       }),
-      entry("4", {
-        role: "toolResult",
-        toolCallId: "p1",
-        toolName: "update_plan",
-        content: [],
-        isError: false,
-        timestamp: 0,
-      }),
-      { type: "session_info", id: "5", parentId: "4", timestamp: "", name: "My session" } as SessionEntry,
+      { type: "session_info", id: "5", parentId: "3", timestamp: "", name: "My session" } as SessionEntry,
     ];
     const replay = buildReplay(entries, "/w");
     const kinds = replay.updates.map((u) => u.sessionUpdate);
@@ -70,19 +56,15 @@ describe("buildReplay", () => {
       "agent_thought_chunk",
       "agent_message_chunk",
       "tool_call",
-      "tool_call",
       "tool_call_update",
-      "tool_call_update",
-      "plan",
     ]);
-    expect(replay.updates[5]).toMatchObject({
+    expect(replay.updates[4]).toMatchObject({
       toolCallId: "c1",
       status: "completed",
       content: [{ type: "content", content: { type: "text", text: "```sh\na\n```\n" } }],
     });
     expect(replay.title).toBe("My session");
     expect(replay.usage).toEqual({ totalTokens: 6, inputTokens: 3, outputTokens: 2, cachedReadTokens: 1 });
-    expect(replay.plan).toEqual([{ content: "step", status: "completed", priority: "medium" }]);
   });
 
   it("replays compaction entries and bash executions", () => {

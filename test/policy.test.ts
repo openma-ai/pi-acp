@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { classifyToolRisk, decisionFromOptionId, PermissionPolicy } from "../src/acp/permissions.ts";
 import { parseSlashCommand, BUILTIN_COMMANDS } from "../src/acp/commands.ts";
-import { planEntriesFromArgs } from "../src/acp/plan-tool.ts";
 import { resolveSettings, SettingsError } from "../src/settings.ts";
 import { sanitizeServerName, mcpToolName } from "../src/acp/mcp.ts";
 
@@ -86,17 +85,6 @@ describe("slash commands", () => {
   it("keeps built-in names unique", () => {
     const names = BUILTIN_COMMANDS.map((c) => c.name);
     expect(new Set(names).size).toBe(names.length);
-  });
-});
-
-describe("plan entries", () => {
-  it("normalizes model output", () => {
-    expect(
-      planEntriesFromArgs({
-        entries: [{ content: " a ", status: "done" }, { content: "", status: "pending" }, null],
-      }),
-    ).toEqual([{ content: "a", status: "pending", priority: "medium" }]);
-    expect(planEntriesFromArgs("nope")).toBeUndefined();
   });
 });
 

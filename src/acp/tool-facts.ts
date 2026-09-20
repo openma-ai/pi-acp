@@ -94,8 +94,6 @@ export function classifyToolCall(name: string, args: unknown, cwd: string, line?
     }
     case "ls":
       return facts("search", displayPath !== undefined ? `List ${displayPath}` : "List directory");
-    case "update_plan":
-      return facts("think", "Update plan");
     default:
       break;
   }

@@ -2,15 +2,14 @@
  * `session/load` history replay: pi session entries → ACP updates (pure).
  *
  * Walks the active branch (compaction-aware) and projects each entry through
- * the same vocabulary the live projection uses. Only the final plan snapshot
- * and the final usage are replayed; intermediate states are noise after the fact.
+ * the same vocabulary the live projection uses. Only the final usage is
+ * replayed; intermediate totals are noise after the fact.
  */
 
-import type { ContentBlock, PlanEntry, ToolCallContent, Usage } from "@agentclientprotocol/sdk";
+import type { ContentBlock, ToolCallContent, Usage } from "@agentclientprotocol/sdk";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { piMeta } from "./meta.ts";
-import { planEntriesFromArgs, PLAN_TOOL_NAME } from "./plan-tool.ts";
 import {
   asRecord,
   classifyToolCall,
@@ -26,7 +25,6 @@ export interface ReplayResult {
   updates: SessionUpdate[];
   title: string | undefined;
   usage: Usage | undefined;
-  plan: PlanEntry[] | undefined;
 }
 
 function userContentToBlocks(content: UserMessage["content"]): ContentBlock[] {
@@ -45,7 +43,6 @@ function userContentToBlocks(content: UserMessage["content"]): ContentBlock[] {
 export function buildReplay(entries: readonly SessionEntry[], cwd: string): ReplayResult {
   const updates: SessionUpdate[] = [];
   let title: string | undefined;
-  let plan: PlanEntry[] | undefined;
   let messageSeq = 0;
   const usage = { input: 0, output: 0, cachedRead: 0, cachedWrite: 0, thought: 0, saw: false };
   const openToolCalls = new Map<string, { name: string; args: unknown }>();
@@ -123,11 +120,6 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
           const details = asRecord(result.details);
           const status = result.isError ? "failed" : "completed";
           const content: ToolCallContent[] = [];
-          if (name === PLAN_TOOL_NAME) {
-            const entries =
-              planEntriesFromArgs(open?.args) ?? (details["entries"] as PlanEntry[] | undefined);
-            if (!result.isError && entries !== undefined) plan = entries;
-          }
           if (isShellTool(name)) {
             if (text.length > 0)
               content.push({ type: "content", content: { type: "text", text: fenceShellOutput(text) } });
@@ -244,7 +236,6 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
     }
   }
 
-  if (plan !== undefined) updates.push({ sessionUpdate: "plan", entries: plan });
   const finalUsage: Usage | undefined = usage.saw
     ? {
         totalTokens: usage.input + usage.output + usage.cachedRead + usage.cachedWrite,
@@ -255,5 +246,5 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
         ...(usage.cachedWrite > 0 ? { cachedWriteTokens: usage.cachedWrite } : {}),
       }
     : undefined;
-  return { updates, title, usage: finalUsage, plan };
+  return { updates, title, usage: finalUsage };
 }
