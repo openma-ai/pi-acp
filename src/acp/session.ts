@@ -67,6 +67,7 @@ import {
   type TerminalOutputMode,
 } from "./translate.ts";
 import { createAcpUiContext } from "./ui-context.ts";
+import { additionalDirectoriesPrompt, resolveAdditionalDirectories } from "./additional-directories.ts";
 
 export interface ClientFeatures {
   /** Display-terminal `_meta` extension the client renders (`_meta.terminal_output[_delta]`). */
@@ -87,6 +88,8 @@ export interface SessionOpenOptions {
   modelRuntime: ModelRuntime;
   features: ClientFeatures;
   mcpServers: readonly McpServer[] | undefined;
+  /** ACP `additionalDirectories`: extra workspace roots surfaced to the model. */
+  additionalDirectories?: readonly string[];
   /** Existing pi session file to open (load/resume) or fork from. */
   sessionFile?: string;
   fork?: boolean;
@@ -138,6 +141,7 @@ export class PiAcpSession {
   private readonly mcpMounts: McpMount[] = [];
   private mcpDiagnostics: string[] = [];
   private eventBus: TappedEventBus | undefined;
+  private _additionalDirectories: string[] = [];
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
@@ -177,6 +181,10 @@ export class PiAcpSession {
     return [...this.startupDiagnostics, ...this.mcpDiagnostics];
   }
 
+  get additionalDirectories(): readonly string[] {
+    return this._additionalDirectories;
+  }
+
   static async open(options: SessionOpenOptions): Promise<PiAcpSession> {
     const session = new PiAcpSession(options);
     await session.boot(options);
@@ -206,10 +214,20 @@ export class PiAcpSession {
     this.mcpMounts.push(...mcp.mounts);
     this.mcpDiagnostics = mcp.diagnostics;
 
+    const extra = resolveAdditionalDirectories(this.cwd, options.additionalDirectories);
+    this._additionalDirectories = extra.directories;
+    for (const problem of extra.problems) {
+      this.mcpDiagnostics.push(`warning: additional directory ${problem.path} skipped: ${problem.reason}`);
+    }
+
     const gate: InlineExtension = {
       name: ADAPTER_EXTENSION_NAME,
       factory: (pi: ExtensionAPI) => {
         pi.on("tool_call", (event) => this.policy.gate(event, (call) => this.requestToolPermission(call)));
+        pi.on("before_agent_start", (event) => {
+          const section = additionalDirectoriesPrompt(this._additionalDirectories, agentDir);
+          return section.length > 0 ? { systemPrompt: `${event.systemPrompt}\n\n${section}` } : undefined;
+        });
       },
     };
     // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.

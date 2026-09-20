@@ -74,6 +74,7 @@ logged or persisted as transcript content.
     "pi": {
       "sessionFile": "/Users/me/.pi/agent/sessions/…/….jsonl",
       "diagnostics": ["warning: …"],
+      "additionalDirectories": ["/abs/other-root"],
       "extensions": [
         {
           "path": "/Users/me/.pi/agent/npm/node_modules/pi-subagents/index.ts",
@@ -95,6 +96,12 @@ logged or persisted as transcript content.
 `commands` map slash commands, `customTypes` map `custom_message` /
 `custom_entry`. Event-bus traffic (`extension_event`) has no sender identity in
 pi; correlate by channel namespace.
+
+`additionalDirectories` echoes the accepted ACP `additionalDirectories` (absolute,
+existing, deduped, primary cwd removed). pi has a single workspace root, so extra
+roots are honoured by listing them and their project context files (AGENTS.md
+etc., via pi's own loader) in the system prompt of every turn; rejected entries
+appear in `diagnostics`.
 
 `diagnostics` lists non-fatal startup problems (extension load errors, untrusted
 project resources, unavailable MCP servers).

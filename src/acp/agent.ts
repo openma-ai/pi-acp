@@ -205,6 +205,7 @@ export class PiAcpAgent implements AcpAgent {
     fork?: boolean;
     reason: "new" | "load" | "resume" | "fork";
     mcpServers: readonly NewSessionRequest["mcpServers"][number][] | undefined;
+    additionalDirectories?: readonly string[] | null;
     sessionId?: string;
   }): Promise<PiAcpSession> {
     const key = params.sessionId ?? `pending:${params.cwd}:${params.sessionFile ?? "new"}:${Date.now()}`;
@@ -222,6 +223,7 @@ export class PiAcpAgent implements AcpAgent {
         modelRuntime,
         features: this.features,
         mcpServers: params.mcpServers,
+        ...(params.additionalDirectories ? { additionalDirectories: params.additionalDirectories } : {}),
         ...(params.sessionFile !== undefined ? { sessionFile: params.sessionFile } : {}),
         ...(params.fork !== undefined ? { fork: params.fork } : {}),
         reason: params.reason,
@@ -309,7 +311,14 @@ export class PiAcpAgent implements AcpAgent {
         loadSession: true,
         promptCapabilities: { image: true, audio: false, embeddedContext: true },
         mcpCapabilities: { http: true, sse: false },
-        sessionCapabilities: { list: {}, delete: {}, fork: {}, resume: {}, close: {} },
+        sessionCapabilities: {
+          list: {},
+          delete: {},
+          fork: {},
+          resume: {},
+          close: {},
+          additionalDirectories: {},
+        },
         auth: { logout: {} },
         _meta: {
           ...piMeta({ version: VERSION, delegation: this.features.delegation }),
@@ -417,8 +426,12 @@ export class PiAcpAgent implements AcpAgent {
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.assertOpen();
     validateCwd(params.cwd);
-    warnAdditionalDirectories(params.additionalDirectories);
-    const session = await this.openSession({ cwd: params.cwd, reason: "new", mcpServers: params.mcpServers });
+    const session = await this.openSession({
+      cwd: params.cwd,
+      reason: "new",
+      mcpServers: params.mcpServers,
+      additionalDirectories: params.additionalDirectories,
+    });
     try {
       await this.requireModel(session);
     } catch (error: unknown) {
@@ -443,6 +456,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: session.session.sessionFile ?? null,
         diagnostics: session.diagnostics,
         extensions: session.extensions(),
+        additionalDirectories: session.additionalDirectories,
       }),
     };
   }
@@ -450,7 +464,6 @@ export class PiAcpAgent implements AcpAgent {
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     this.assertOpen();
     validateCwd(params.cwd);
-    warnAdditionalDirectories(params.additionalDirectories);
     const stored = await findSession(params.sessionId, this.sessionDir);
     if (stored === undefined) throw invalidParams(`unknown session: ${params.sessionId}`);
     const session = await this.openSession({
@@ -458,6 +471,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "load",
       mcpServers: params.mcpServers,
+      additionalDirectories: params.additionalDirectories,
       sessionId: params.sessionId,
     });
     session.replayHistory();
@@ -472,6 +486,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: stored.path,
         diagnostics: session.diagnostics,
         extensions: session.extensions(),
+        additionalDirectories: session.additionalDirectories,
       }),
     };
   }
@@ -479,7 +494,6 @@ export class PiAcpAgent implements AcpAgent {
   async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     this.assertOpen();
     validateCwd(params.cwd);
-    warnAdditionalDirectories(params.additionalDirectories);
     const stored = await findSession(params.sessionId, this.sessionDir);
     if (stored === undefined) throw invalidParams(`unknown session: ${params.sessionId}`);
     const session = await this.openSession({
@@ -487,6 +501,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "resume",
       mcpServers: params.mcpServers,
+      additionalDirectories: params.additionalDirectories,
       sessionId: params.sessionId,
     });
     await this.requireModel(session).catch((error: unknown) => {
@@ -500,6 +515,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: stored.path,
         diagnostics: session.diagnostics,
         extensions: session.extensions(),
+        additionalDirectories: session.additionalDirectories,
       }),
     };
   }
@@ -507,7 +523,6 @@ export class PiAcpAgent implements AcpAgent {
   async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
     this.assertOpen();
     validateCwd(params.cwd);
-    warnAdditionalDirectories(params.additionalDirectories);
     const live = this.sessions.get(params.sessionId);
     const sourceFile =
       live?.session.sessionFile ?? (await findSession(params.sessionId, this.sessionDir))?.path;
@@ -518,6 +533,7 @@ export class PiAcpAgent implements AcpAgent {
       fork: true,
       reason: "fork",
       mcpServers: params.mcpServers ?? undefined,
+      additionalDirectories: params.additionalDirectories,
     });
     await this.requireModel(session).catch((error: unknown) => {
       logWarn(`forked session without a usable model: ${errorMessage(error)}`);
@@ -531,6 +547,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: session.session.sessionFile ?? null,
         forkedFrom: params.sessionId,
         extensions: session.extensions(),
+        additionalDirectories: session.additionalDirectories,
       }),
     };
   }
@@ -748,10 +765,4 @@ export class PiAcpAgent implements AcpAgent {
 function validateCwd(cwd: string): void {
   if (!isAbsolute(cwd)) throw invalidParams(`cwd must be an absolute path: ${cwd}`);
   if (!existsSync(cwd)) throw invalidParams(`cwd does not exist: ${cwd}`);
-}
-
-function warnAdditionalDirectories(directories: string[] | undefined): void {
-  if (directories !== undefined && directories.length > 0) {
-    logWarn(`additionalDirectories ignored (pi has a single workspace root): ${directories.join(", ")}`);
-  }
 }
