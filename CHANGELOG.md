@@ -9,7 +9,6 @@ Initial release: a full-featured ACP adapter for pi, in-process on the pi SDK.
 - Permission modes (`read-only` / `ask` / `full-access`) as ACP session modes with
   `session/request_permission` gating and per-session "always" memory
 - Config options: permission mode, model (grouped by provider), thinking level, auto-compaction
-- ACP `plan` from extensions via the `acp:plan` event channel (no built-in plan tool)
 - Usage accounting: `usage_update` per assistant message, `usage` on `session/prompt`
 - Compaction lifecycle (`compaction_update`), auto-retry notices, queue state
 - Sessions: `session/list`, `session/load` (full replay), `session/resume`, `session/fork`,

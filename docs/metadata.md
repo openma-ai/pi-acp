@@ -183,17 +183,6 @@ Forms generated for pi extension dialogs include the original request:
 `ui` is `select`, `confirm`, `input`, or `editor`. The standard form schema is
 complete on its own.
 
-## `acp:*` event channels (extension → ACP)
-
-Extensions declare ACP semantics by emitting on reserved channels; the adapter
-forwards them as first-class updates instead of `extension_event`:
-
-| Channel    | Payload                                                                                              | ACP update                   |
-| ---------- | ---------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `acp:plan` | `{ entries: [{ content, status?: pending\|in_progress\|completed, priority?: high\|medium\|low }] }` | `plan` (whole-list snapshot) |
-
-A malformed payload falls back to `extension_event`.
-
 ## Extension methods
 
 | Method              | Params                                                                              | Result                                                                                                                          |

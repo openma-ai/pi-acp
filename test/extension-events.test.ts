@@ -4,30 +4,8 @@ import {
   describeExtensionEvent,
   inferCorrelationId,
   inferPhase,
-  planEntriesFromEvent,
   sanitizePayload,
 } from "../src/acp/extension-events.ts";
-
-describe("acp:plan convention", () => {
-  it("normalizes plan entries and rejects non-plans", () => {
-    expect(
-      planEntriesFromEvent({
-        entries: [
-          { content: " a ", status: "done" },
-          { content: "", status: "pending" },
-          null,
-          { content: "b", status: "completed", priority: "high" },
-        ],
-      }),
-    ).toEqual([
-      { content: "a", status: "pending", priority: "medium" },
-      { content: "b", status: "completed", priority: "high" },
-    ]);
-    expect(planEntriesFromEvent({ entries: [] })).toEqual([]);
-    expect(planEntriesFromEvent({ nope: 1 })).toBeUndefined();
-    expect(planEntriesFromEvent("x")).toBeUndefined();
-  });
-});
 
 describe("extension event inference", () => {
   it("reads a lifecycle phase from channel naming conventions", () => {

@@ -19,40 +19,6 @@
  */
 
 import { createEventBus, type EventBus, type EventBusController } from "@earendil-works/pi-coding-agent";
-import type { PlanEntry } from "@agentclientprotocol/sdk";
-
-/**
- * `acp:*` channels: the one place an extension can speak ACP directly. pi has
- * no plan primitive, so a plan extension that wants the client's plan panel
- * emits `pi.events.emit("acp:plan", { entries })` and the adapter forwards it as
- * a first-class `plan` update. Anything else on the bus stays `extension_event`.
- */
-export const ACP_PLAN_CHANNEL = "acp:plan";
-
-const PLAN_STATUSES = new Set(["pending", "in_progress", "completed"]);
-const PLAN_PRIORITIES = new Set(["high", "medium", "low"]);
-
-/** Normalize an `acp:plan` payload; undefined when it is not a plan. */
-export function planEntriesFromEvent(data: unknown): PlanEntry[] | undefined {
-  if (data === null || typeof data !== "object") return undefined;
-  const raw = (data as { entries?: unknown }).entries;
-  if (!Array.isArray(raw)) return undefined;
-  const entries: PlanEntry[] = [];
-  for (const item of raw) {
-    if (item === null || typeof item !== "object") continue;
-    const record = item as Record<string, unknown>;
-    const content = typeof record["content"] === "string" ? record["content"].trim() : "";
-    if (content.length === 0) continue;
-    const status = PLAN_STATUSES.has(String(record["status"]))
-      ? (record["status"] as PlanEntry["status"])
-      : "pending";
-    const priority = PLAN_PRIORITIES.has(String(record["priority"]))
-      ? (record["priority"] as PlanEntry["priority"])
-      : "medium";
-    entries.push({ content, status, priority });
-  }
-  return entries;
-}
 
 export type InferredPhase =
   "started" | "update" | "completed" | "failed" | "cancelled" | "request" | "response";

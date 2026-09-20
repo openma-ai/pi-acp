@@ -52,8 +52,6 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
 - **Config options** — model (grouped by provider, live from pi's model runtime), thinking
   level (only when the model reasons), auto-compaction toggle. Model/thinking changes persist
   as pi defaults, like the pi TUI.
-- **Plans (extension-provided)** — pi has no plan primitive and the adapter adds none. A plan
-  extension emits `pi.events.emit("acp:plan", { entries })` and the client's plan panel lights up.
 - **Usage** — `usage_update` per assistant message with context size and cost; aggregate
   `usage` on every `session/prompt` response.
 - **Compaction and retries** — `compaction_update` for manual/automatic compaction; auto-retry
@@ -133,7 +131,7 @@ openma-pi-acp
         ├─ ui-context.ts      pi ExtensionUIContext over elicitation / permission
         ├─ delegation.ts      client fs + terminal backed pi tools
         ├─ mcp.ts             ACP mcpServers → pi custom tools
-        └─ extension-events.ts  pi.events → extension_event / acp:plan
+        └─ extension-events.ts  pi.events → extension_event
    ▼
 @earendil-works/pi-coding-agent (sessions, models, tools, extensions, skills, compaction, …)
 ```

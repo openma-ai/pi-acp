@@ -42,13 +42,7 @@ import { availableCommandsFor } from "./commands.ts";
 import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
 import { createDelegatedTools, type DelegationCapabilities } from "./delegation.ts";
 import { authRequired, classifyFailure, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
-import {
-  ACP_PLAN_CHANNEL,
-  createTappedEventBus,
-  describeExtensionEvent,
-  planEntriesFromEvent,
-  type TappedEventBus,
-} from "./extension-events.ts";
+import { createTappedEventBus, describeExtensionEvent, type TappedEventBus } from "./extension-events.ts";
 import { buildReplay } from "./history.ts";
 import { mountMcpServers, type McpMount } from "./mcp.ts";
 import { piMeta } from "./meta.ts";
@@ -392,13 +386,6 @@ export class PiAcpSession {
   }
 
   private onExtensionEvent(channel: string, data: unknown): void {
-    if (channel === ACP_PLAN_CHANNEL) {
-      const entries = planEntriesFromEvent(data);
-      if (entries !== undefined) {
-        this.emit({ sessionUpdate: "plan", entries });
-        return;
-      }
-    }
     const facts = describeExtensionEvent(channel, data);
     this.emit({
       sessionUpdate: "session_info_update",

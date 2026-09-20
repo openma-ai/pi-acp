@@ -38,8 +38,9 @@ npm run build
 npm run format
 ```
 
-Do not add tools or semantics pi does not have; extensions declare ACP semantics
-themselves over `acp:*` event channels.
+Do not add tools, protocol conventions, or semantics pi does not have. If pi
+lacks a primitive (plan, subagents, background tasks), the ACP surface lacks it
+too; extension traffic is forwarded as-is, never interpreted.
 
 Do not commit or publish unless asked. Patch releases only unless the
 maintainer approves a minor bump.
