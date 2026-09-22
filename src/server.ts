@@ -3,7 +3,7 @@
  */
 
 import { AgentSideConnection, ndJsonStream, type Stream } from "@agentclientprotocol/sdk";
-import { Readable, Writable } from "node:stream";
+import { Readable } from "node:stream";
 import { PiAcpAgent, type PiAcpAgentOptions } from "./acp/agent.ts";
 import { RequestIdTracker, tapRequestIds } from "./acp/request-ids.ts";
 import { errorMessage, logWarn } from "./log.ts";
@@ -16,10 +16,20 @@ export interface ServerHandle {
 }
 
 export function stdioStream(): Stream {
-  return ndJsonStream(
-    Writable.toWeb(process.stdout) as WritableStream<Uint8Array>,
-    Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
-  );
+  // Pi runtimes/extensions can redirect process.stdout.write after session creation.
+  // Keep the protocol writer bound before loading them and await each complete write.
+  const write = process.stdout.write.bind(process.stdout);
+  const output = new WritableStream<Uint8Array>({
+    write(chunk) {
+      return new Promise<void>((resolve, reject) => {
+        write(Buffer.from(chunk), (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    },
+  });
+  return ndJsonStream(output, Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>);
 }
 
 export function serve(options: PiAcpAgentOptions & { stream?: Stream }): ServerHandle {
