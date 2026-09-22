@@ -28,8 +28,6 @@ import {
   type ResumeSessionResponse,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
-  type SetSessionModeRequest,
-  type SetSessionModeResponse,
 } from "@agentclientprotocol/sdk";
 import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { existsSync, unlinkSync } from "node:fs";
@@ -56,7 +54,6 @@ import { runBuiltinCommand } from "./builtin-commands.ts";
 import { isBuiltinCommand, parseSlashCommand } from "./commands.ts";
 import {
   CONFIG_AUTO_COMPACTION,
-  CONFIG_MODE,
   CONFIG_MODEL,
   CONFIG_THINKING,
   parseBooleanOptionValue,
@@ -64,7 +61,6 @@ import {
 import { delegationFromClient } from "./delegation.ts";
 import { authRequired, internalError, invalidParams } from "./errors.ts";
 import { piMeta, readPiMeta } from "./meta.ts";
-import { isPermissionMode } from "./permissions.ts";
 import { convertPrompt, UnsupportedPromptContentError } from "./prompt.ts";
 import type { RequestIdTracker } from "./request-ids.ts";
 import { PiAcpSession, type ClientFeatures } from "./session.ts";
@@ -451,7 +447,6 @@ export class PiAcpAgent implements AcpAgent {
     void this.publishSurfaces(session, { startup: true });
     return {
       sessionId: session.sessionId,
-      modes: session.modes(),
       configOptions: session.configOptions(),
       _meta: piMeta({
         sessionFile: session.session.sessionFile ?? null,
@@ -481,7 +476,6 @@ export class PiAcpAgent implements AcpAgent {
     });
     void this.publishSurfaces(session);
     return {
-      modes: session.modes(),
       configOptions: session.configOptions(),
       _meta: piMeta({
         sessionFile: stored.path,
@@ -510,7 +504,6 @@ export class PiAcpAgent implements AcpAgent {
     });
     void this.publishSurfaces(session);
     return {
-      modes: session.modes(),
       configOptions: session.configOptions(),
       _meta: piMeta({
         sessionFile: stored.path,
@@ -542,7 +535,6 @@ export class PiAcpAgent implements AcpAgent {
     void this.publishSurfaces(session);
     return {
       sessionId: session.sessionId,
-      modes: session.modes(),
       configOptions: session.configOptions(),
       _meta: piMeta({
         sessionFile: session.session.sessionFile ?? null,
@@ -612,7 +604,7 @@ export class PiAcpAgent implements AcpAgent {
     // (extension commands, prompt templates, /skill:name) inside `prompt()`.
     const slash = converted.images.length === 0 ? parseSlashCommand(converted.text) : undefined;
     if (slash !== undefined && isBuiltinCommand(slash.name)) {
-      if (session.isRunning && !["status", "queue", "mode", "session"].includes(slash.name)) {
+      if (session.isRunning && !["status", "queue", "session"].includes(slash.name)) {
         session.text(`⚠ /${slash.name} is unavailable while a turn is running.`);
         return { stopReason: "end_turn" };
       }
@@ -626,7 +618,6 @@ export class PiAcpAgent implements AcpAgent {
             updatedAt: new Date().toISOString(),
           });
         }
-        if (outcome.refresh?.mode === true) session.publishMode();
         if (outcome.refresh?.config === true) session.publishConfigOptions();
         if (outcome.refresh?.commands === true) session.publishCommands();
         await session.flush();
@@ -646,26 +637,12 @@ export class PiAcpAgent implements AcpAgent {
     await session.cancel();
   }
 
-  async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
-    const session = await this.requireOrRestore(params.sessionId);
-    if (!isPermissionMode(params.modeId)) throw invalidParams(`unknown mode: ${params.modeId}`);
-    session.setMode(params.modeId);
-    session.publishConfigOptions();
-    return {};
-  }
-
   async setSessionConfigOption(
     params: SetSessionConfigOptionRequest,
   ): Promise<SetSessionConfigOptionResponse> {
     const session = await this.requireOrRestore(params.sessionId);
     const value = params.value;
     switch (params.configId) {
-      case CONFIG_MODE: {
-        if (typeof value !== "string" || !isPermissionMode(value))
-          throw invalidParams(`unknown mode: ${String(value)}`);
-        session.setMode(value);
-        break;
-      }
       case CONFIG_MODEL: {
         if (typeof value !== "string") throw invalidParams("model must be a string");
         if (session.isRunning) throw invalidParams("cannot switch models while a turn is running");

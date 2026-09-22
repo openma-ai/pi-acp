@@ -160,7 +160,6 @@ describe("capability gating", () => {
 
   it("uses terminal_output_delta when the client asks for it", async () => {
     harness = await Harness.create({
-      settings: { permissionMode: "full-access" },
       clientCapabilities: { _meta: { terminal_output_delta: true } },
     });
     await harness.initialize();
@@ -207,7 +206,7 @@ describe("capability gating", () => {
 
 describe("file changes and failures", () => {
   it("annotates diffs with stats and reports per-turn file changes", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     const file = join(harness.workspace, "a.txt");

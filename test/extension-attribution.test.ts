@@ -53,7 +53,7 @@ function metaEvents(h: Harness, sessionId: string, event: string): Record<string
 
 describe("extension attribution", () => {
   it("lists loaded extensions with owned tools, commands, and custom types", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     install(harness);
     await harness.initialize();
     const created = await harness.client.newSession({ cwd: harness.workspace, mcpServers: [] });
@@ -71,7 +71,7 @@ describe("extension attribution", () => {
   });
 
   it("attributes tool calls to their extension and forwards custom messages with details", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     install(harness);
     await harness.initialize();
     const sessionId = await harness.newSession();
@@ -114,7 +114,7 @@ describe("extension attribution", () => {
   });
 
   it("replays custom messages and entries with payloads on session/load", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     install(harness);
     await harness.initialize();
     const sessionId = await harness.newSession();

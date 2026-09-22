@@ -4,16 +4,8 @@ export { SessionProjection, type SessionUpdate, assistantStopReasonToAcp } from 
 export { buildReplay, type ReplayResult } from "./acp/history.ts";
 export { convertPrompt, UnsupportedPromptContentError, type ConvertedPrompt } from "./acp/prompt.ts";
 export { classifyToolCall, type ToolCallFacts } from "./acp/tool-facts.ts";
-export {
-  PermissionPolicy,
-  PERMISSION_MODES,
-  DEFAULT_PERMISSION_MODE,
-  classifyToolRisk,
-  type PermissionMode,
-} from "./acp/permissions.ts";
 export { buildConfigOptions, findModel, modelValue } from "./acp/config-options.ts";
 export { BUILTIN_COMMANDS, availableCommandsFor, parseSlashCommand } from "./acp/commands.ts";
-export { mountMcpServers, mcpToolName, sanitizeServerName } from "./acp/mcp.ts";
 export { buildAuthMethods, TERMINAL_AUTH_METHOD_ID } from "./acp/auth.ts";
 export { serve, stdioStream, type ServerHandle } from "./server.ts";
 export { resolveSettings, SettingsError, HELP_TEXT, type Settings } from "./settings.ts";

@@ -21,7 +21,7 @@ function stateCommand(configId: string): { _meta: Record<string, unknown> } {
 }
 
 export const BUILTIN_COMMANDS: BuiltinCommand[] = [
-  { name: "status", description: "Show adapter, model, mode, and session status" },
+  { name: "status", description: "Show adapter, model, and session status" },
   {
     name: "model",
     description: "List models or switch model",
@@ -33,12 +33,6 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
     description: "Show or set the thinking level",
     input: { hint: "off|minimal|low|medium|high|xhigh|max" },
     ...stateCommand("thinking"),
-  },
-  {
-    name: "mode",
-    description: "Show or set the permission mode",
-    input: { hint: "read-only|ask|full-access" },
-    ...stateCommand("mode"),
   },
   {
     name: "compact",
@@ -56,7 +50,6 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "session", description: "Show session statistics (messages, tokens, cost, file)" },
   { name: "export", description: "Export the session to HTML", input: { hint: "[output path]" } },
   { name: "tools", description: "List or set active tools", input: { hint: "[tool names…]" } },
-  { name: "mcp", description: "List the MCP servers and tools mounted in this session" },
   { name: "skills", description: "List available skills" },
   {
     name: "steering",

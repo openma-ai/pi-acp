@@ -11,8 +11,8 @@
 
 `@openma/pi-acp` runs pi **in-process** on the pi SDK (`createAgentSessionRuntime`)
 and maps its session-event stream onto the full ACP vocabulary: streamed text and
-reasoning, tool calls with diffs and terminals, plans, permission requests,
-session modes, config options, slash commands, skills, MCP servers, client
+reasoning, tool calls with diffs and terminals, extension interactions,
+config options, slash commands, skills, client
 filesystem/terminal delegation, and session list/load/resume/fork/close/delete.
 
 It reuses everything pi already owns — `~/.pi/agent` settings, credentials,
@@ -21,8 +21,10 @@ in the editor can be `/resume`d in the terminal and vice versa.
 
 ## Install
 
+Requires Node.js **22.19 or newer** and the Pi **0.85.1** SDK family.
+
 ```bash
-npm install -g @earendil-works/pi-coding-agent   # pi itself (>= 0.85)
+npm install -g @earendil-works/pi-coding-agent   # pi itself
 npm install -g @openma/pi-acp
 pi                                                # log in once (/login) if you have not
 ```
@@ -45,10 +47,7 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
 - **Tool calls** — ACP kinds, human titles, absolute file locations (edit line inferred),
   structured `diff` content for `edit`/`write`, image results, shell output fenced or on a
   **display terminal** when the client supports one (`_meta.terminal_output`).
-- **Permissions as session modes** — `read-only` / `ask` / `full-access`. `ask` routes every
-  mutating tool (shell, edit, write, MCP, unknown extension tools) through
-  `session/request_permission` with allow/reject once/always; `read-only` blocks them before
-  they run. Also exposed as the `mode` config option for clients that only render those.
+- **Native pi execution** — tools run with pi’s own behavior; the adapter adds no tool approval modes.
 - **Config options** — model (grouped by provider, live from pi's model runtime), thinking
   level (only when the model reasons), auto-compaction toggle. Model/thinking changes persist
   as pi defaults, like the pi TUI.
@@ -64,13 +63,12 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   history replay (compaction-aware branch), `session/resume` without replay, `session/fork`,
   `session/close`, `session/delete`, session titles, and silent restore when a client prompts
   a session the agent process forgot.
-- **Slash commands** — adapter built-ins (`/status`, `/model`, `/thinking`, `/mode`, `/compact`,
-  `/autocompact`, `/name`, `/rename`, `/session`, `/export`, `/tools`, `/mcp`, `/skills`,
+- **Slash commands** — adapter built-ins (`/status`, `/model`, `/thinking`, `/compact`,
+  `/autocompact`, `/name`, `/rename`, `/session`, `/export`, `/tools`, `/skills`,
   `/steering`, `/follow-up`, `/queue`, `/bash`, `/reload`, `/changelog`) plus pi prompt
   templates, `/skill:<name>`, and extension
   commands — all advertised through `available_commands_update`.
-- **MCP servers** — per-session `mcpServers` (stdio + streamable HTTP) mount as pi tools named
-  `mcp__<server>__<tool>`; a failing server is reported, never fatal.
+- **MCP** — ACP `mcpServers` mount stdio and Streamable HTTP tools through the official MCP client onto Pi's native custom-tool API. New, loaded, and resumed sessions use the descriptors supplied by the client; connections close with the session. SSE is not advertised.
 - **Client delegation** — when the client advertises `fs.readTextFile` / `fs.writeTextFile`,
   pi's `read`/`edit`/`write` go through the editor (unsaved buffers, in-editor edits); with
   `terminal`, `bash` runs in a client-owned terminal. Disable with `--no-delegation`.
@@ -100,20 +98,53 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `terminal_output` / `terminal_output_delta`, diffs carry `diffStats` and add/update kind, each
   turn ends with a file-change summary, and failed turns carry a typed failure kind.
 
+## MCP tools over ACP
+
+The ACP client supplies `mcpServers` when it creates, loads, or resumes a session.
+The adapter connects directly and registers the discovered tools through Pi's SDK;
+no MCP extension or separate Pi configuration file is required.
+
+For example, an ACP session request can include a local project coordination server:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "Project",
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": [{ "name": "Authorization", "value": "Bearer <session-token>" }]
+    }
+  ]
+}
+```
+
+A remote tool named `project.delegate` appears to Pi as
+`mcp__Project__project_delegate`. Names are normalized, bounded to 64 characters,
+and disambiguated; calls still use the original remote name. Both stdio and
+Streamable HTTP servers are supported, including JSON and streamed HTTP responses.
+Legacy SSE transport is not supported.
+
+Tool discovery follows pagination. Results retain text, images, and structured
+receipts; tool failures and cancellation propagate back to Pi. Connections belong
+to the ACP session and close on teardown or failed initialization. A server that
+cannot initialize is reported in diagnostics and skipped. On reconnect, clients
+should call `session/load` or `session/resume` with current descriptors and credentials;
+an empty `mcpServers` array removes the previous session's MCP tools.
+
 ## Configuration
 
 Flags win over environment variables, which win over defaults.
 
-| Flag                | Env                      | Default       | Purpose                                                       |
-| ------------------- | ------------------------ | ------------- | ------------------------------------------------------------- |
-| `--agent-dir`       | `PI_CODING_AGENT_DIR`    | `~/.pi/agent` | pi config directory                                           |
-| `--permission-mode` | `PI_ACP_PERMISSION_MODE` | `ask`         | `read-only` / `ask` / `full-access`                           |
-| `--model`           | `PI_ACP_MODEL`           | pi default    | `provider/model[:thinking]` for new sessions                  |
-| `--session-dir`     | `PI_ACP_SESSION_DIR`     | pi default    | Session storage directory                                     |
-| `--trust-projects`  | `PI_ACP_TRUST_PROJECTS`  | off           | Load `.pi/` project resources without a stored trust decision |
-| `--no-delegation`   | `PI_ACP_DELEGATION=0`    | on            | Never use client fs/terminal delegation                       |
-| `--quiet-startup`   | `PI_ACP_QUIET_STARTUP`   | pi setting    | Skip the startup banner                                       |
-| —                   | `PI_ACP_DEBUG`           | off           | Verbose stderr diagnostics                                    |
+| Flag               | Env                     | Default       | Purpose                                                       |
+| ------------------ | ----------------------- | ------------- | ------------------------------------------------------------- |
+| `--agent-dir`      | `PI_CODING_AGENT_DIR`   | `~/.pi/agent` | pi config directory                                           |
+| `--model`          | `PI_ACP_MODEL`          | pi default    | `provider/model[:thinking]` for new sessions                  |
+| `--session-dir`    | `PI_ACP_SESSION_DIR`    | pi default    | Session storage directory                                     |
+| `--trust-projects` | `PI_ACP_TRUST_PROJECTS` | off           | Load `.pi/` project resources without a stored trust decision |
+| `--no-delegation`  | `PI_ACP_DELEGATION=0`   | on            | Never use client fs/terminal delegation                       |
+| `--quiet-startup`  | `PI_ACP_QUIET_STARTUP`  | pi setting    | Skip the startup banner                                       |
+| —                  | `PI_ACP_DEBUG`          | off           | Verbose stderr diagnostics                                    |
 
 Project trust follows pi: `.pi/` extensions in an untrusted cwd are not loaded
 until the user trusts it (`pi` interactively, `defaultProjectTrust: "always"` in
@@ -129,16 +160,15 @@ openma-pi-acp
    ├─ src/bin.ts              CLI, terminal-login, process lifetime
    ├─ src/server.ts           AgentSideConnection over stdio (or an injected stream)
    └─ src/acp/
-        ├─ agent.ts           ACP methods: initialize, auth, sessions, prompt, cancel, modes, options, ext methods
-        ├─ session.ts         one ACP session ↔ one pi AgentSessionRuntime (tools, gate, lifecycle)
+        ├─ agent.ts           ACP methods: initialize, auth, sessions, prompt, cancel, options, ext methods
+        ├─ session.ts         one ACP session ↔ one pi AgentSessionRuntime (tools, extensions, lifecycle)
         ├─ translate.ts       pi AgentSessionEvent → session/update (pure)
         ├─ history.ts         session/load replay from pi's JSONL entries (pure)
-        ├─ permissions.ts     modes + tool-call gate (inline pi extension)
-        ├─ config-options.ts  mode / model / thinking / auto-compaction
+        ├─ config-options.ts  model / thinking / auto-compaction
         ├─ commands.ts, builtin-commands.ts
         ├─ ui-context.ts      pi ExtensionUIContext over elicitation / permission
         ├─ delegation.ts      client fs + terminal backed pi tools
-        ├─ mcp.ts             ACP mcpServers → pi custom tools
+        ├─ mcp.ts             session-scoped MCP clients → Pi custom tools
         └─ extension-events.ts  pi.events → extension_event
    ▼
 @earendil-works/pi-coding-agent (sessions, models, tools, extensions, skills, compaction, …)
@@ -151,7 +181,7 @@ openma-pi-acp
 ```bash
 npm install
 npm run typecheck
-npm test            # unit + in-process e2e with a faux model (no network)
+npm test            # faux-model sessions and local MCP servers; no provider requests
 npm run build
 node dist/bin.js --help
 ```

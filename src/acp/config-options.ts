@@ -1,15 +1,12 @@
 /**
- * ACP session config options for a pi session: permission mode, model, thinking
- * level, and auto-compaction. Everything also lives in `modes` for clients that
- * only render one of the two surfaces.
+ * ACP session config options for a pi session: model, thinking
+ * level, and auto-compaction. Options are derived from pi’s current session.
  */
 
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import { availableModes, type PermissionMode } from "./permissions.ts";
 
-export const CONFIG_MODE = "mode";
 export const CONFIG_MODEL = "model";
 export const CONFIG_THINKING = "thinking";
 export const CONFIG_AUTO_COMPACTION = "auto_compaction";
@@ -48,24 +45,9 @@ export function parseBooleanOptionValue(value: unknown): boolean | undefined {
 
 export function buildConfigOptions(
   session: AgentSession,
-  mode: PermissionMode,
   surface: ConfigOptionSurface = { booleanOptions: true },
 ): SessionConfigOption[] {
-  const options: SessionConfigOption[] = [
-    {
-      type: "select",
-      id: CONFIG_MODE,
-      name: "Permissions",
-      category: "mode",
-      description: "What the agent may do without asking",
-      currentValue: mode,
-      options: availableModes().map((entry) => ({
-        value: entry.id,
-        name: entry.name,
-        description: entry.description ?? null,
-      })),
-    },
-  ];
+  const options: SessionConfigOption[] = [];
 
   const available = session.modelRuntime.getAvailableSnapshot();
   const current = session.model;

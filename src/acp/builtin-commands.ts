@@ -7,15 +7,13 @@ import { join } from "node:path";
 import { getPackageDir, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { errorMessage } from "../log.ts";
 import { modelValue } from "./config-options.ts";
-import { isPermissionMode, PERMISSION_MODES } from "./permissions.ts";
-import { parseMcpToolName } from "./tool-facts.ts";
 import type { PiAcpSession } from "./session.ts";
 import { VERSION } from "../version.ts";
 
 export interface CommandOutcome {
   text: string;
   /** Surfaces changed by the command; the agent republishes them. */
-  refresh?: { config?: boolean; commands?: boolean; mode?: boolean; title?: string };
+  refresh?: { config?: boolean; commands?: boolean; title?: string };
 }
 
 function onOff(value: string): boolean | undefined {
@@ -40,7 +38,6 @@ export async function runBuiltinCommand(
         ["Adapter", `openma-pi-acp ${VERSION} (pi ${PI_VERSION})`],
         ["Model", model !== undefined ? `${modelValue(model)} (${model.name})` : "(none)"],
         ["Thinking", pi.thinkingLevel],
-        ["Permissions", session.policy.mode],
         ["Auto-compaction", pi.autoCompactionEnabled ? "on" : "off"],
         ["Workspace", session.cwd],
         ["Session", `${pi.sessionId}${pi.sessionFile !== undefined ? ` — ${pi.sessionFile}` : ""}`],
@@ -107,17 +104,6 @@ export async function runBuiltinCommand(
       }
       return { text: `thinking → ${pi.thinkingLevel}`, refresh: { config: true } };
     }
-    case "mode": {
-      if (args.length === 0)
-        return {
-          text: `permission mode: ${session.policy.mode} (available: ${PERMISSION_MODES.join(", ")})`,
-        };
-      const mode = args.toLowerCase();
-      if (!isPermissionMode(mode))
-        return { text: `⚠ unknown mode "${args}"; use ${PERMISSION_MODES.join(" | ")}` };
-      session.setMode(mode);
-      return { text: `permission mode → ${mode}`, refresh: { config: true, mode: true } };
-    }
     case "compact": {
       try {
         const result = await pi.compact(args.length > 0 ? args : undefined);
@@ -141,23 +127,6 @@ export async function runBuiltinCommand(
         return { text: `session name: ${pi.sessionName ?? "(unset)"}\nusage: /${name} <name>` };
       pi.setSessionName(args);
       return { text: `session name → ${args}`, refresh: { title: args } };
-    }
-    case "mcp": {
-      const active = new Set(pi.getActiveToolNames());
-      const byServer = new Map<string, string[]>();
-      for (const tool of pi.getAllTools()) {
-        const parsed = parseMcpToolName(tool.name);
-        if (parsed === undefined) continue;
-        const list = byServer.get(parsed.server) ?? [];
-        list.push(`${active.has(tool.name) ? "[x]" : "[ ]"} ${parsed.tool}`);
-        byServer.set(parsed.server, list);
-      }
-      if (byServer.size === 0) return { text: "No MCP servers are mounted in this session." };
-      return {
-        text: [...byServer.entries()]
-          .map(([server, tools]) => [`**${server}**`, ...tools].join("\n"))
-          .join("\n\n"),
-      };
     }
     case "skills": {
       const skills = pi.resourceLoader.getSkills().skills;

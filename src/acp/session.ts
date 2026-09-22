@@ -1,9 +1,9 @@
 /**
  * One ACP session ↔ one pi `AgentSessionRuntime`, in-process.
  *
- * Owns runtime creation (services, tools, permission gate extension), event
+ * Owns runtime creation (services, tools, extensions), event
  * projection to `session/update`, prompt lifecycle (inflight turn, steering,
- * cancellation), permission requests, MCP mounts, and teardown.
+ * cancellation), and teardown.
  */
 
 import type {
@@ -12,7 +12,6 @@ import type {
   McpServer,
   SessionConfigOption,
   StopReason,
-  ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import {
   AgentSessionRuntime,
@@ -28,11 +27,8 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type CreateAgentSessionRuntimeFactory,
-  type ExtensionAPI,
-  type InlineExtension,
   type ModelRuntime,
   type ToolDefinition,
-  type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { readFileSync } from "node:fs";
@@ -43,23 +39,10 @@ import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
 import { createDelegatedTools, type DelegationCapabilities } from "./delegation.ts";
 import { authRequired, classifyFailure, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
 import { createTappedEventBus, describeExtensionEvent, type TappedEventBus } from "./extension-events.ts";
-import {
-  ADAPTER_EXTENSION_NAME,
-  extensionInventory,
-  toolOwnerLookup,
-  type ExtensionInventoryEntry,
-} from "./extension-inventory.ts";
+import { extensionInventory, toolOwnerLookup, type ExtensionInventoryEntry } from "./extension-inventory.ts";
 import { buildReplay } from "./history.ts";
-import { mountMcpServers, type McpMount } from "./mcp.ts";
 import { piMeta } from "./meta.ts";
-import {
-  decisionFromOptionId,
-  PERMISSION_OPTIONS,
-  PermissionPolicy,
-  type PermissionMode,
-  modeState,
-} from "./permissions.ts";
-import { classifyToolCall } from "./tool-facts.ts";
+import { mountMcpServers, type McpMount } from "./mcp.ts";
 import {
   assistantStopReasonToAcp,
   SessionProjection,
@@ -137,31 +120,30 @@ function stubTheme(): AgentSession["resourceLoader"] extends { getThemes(): { th
 export class PiAcpSession {
   readonly cwd: string;
   readonly conn: AgentSideConnection;
-  readonly policy: PermissionPolicy;
   readonly projection: SessionProjection;
 
   private runtime!: AgentSessionRuntime;
   private readonly settings: Settings;
   private readonly features: ClientFeatures;
-  private readonly mcpMounts: McpMount[] = [];
-  private mcpDiagnostics: string[] = [];
+  private resourceDiagnostics: string[] = [];
   private eventBus: TappedEventBus | undefined;
   private known = new Set<KnownExtensionId>();
   private requestedDirectories: readonly string[] | undefined;
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
+  private readonly trustedProjects = new Set<string>();
   private closed = false;
   private lastEmit: Promise<void> = Promise.resolve();
   private _sessionId = "";
   private startupDiagnostics: string[] = [];
+  private mcpMounts: McpMount[] = [];
 
   private constructor(options: SessionOpenOptions) {
     this.cwd = options.cwd;
     this.conn = options.conn;
     this.settings = options.settings;
     this.features = options.features;
-    this.policy = new PermissionPolicy(options.settings.permissionMode);
     this.projection = new SessionProjection({
       cwd: options.cwd,
       // A delegated client terminal owns the presentation; the display-terminal
@@ -184,7 +166,7 @@ export class PiAcpSession {
   }
 
   get diagnostics(): string[] {
-    return [...this.startupDiagnostics, ...this.mcpDiagnostics];
+    return [...this.startupDiagnostics, ...this.resourceDiagnostics];
   }
 
   /** Known third-party extensions loaded in this session (see extensions/registry.ts). */
@@ -199,8 +181,16 @@ export class PiAcpSession {
 
   static async open(options: SessionOpenOptions): Promise<PiAcpSession> {
     const session = new PiAcpSession(options);
-    await session.boot(options);
-    return session;
+    try {
+      await session.boot(options);
+      return session;
+    } catch (error) {
+      session.closed = true;
+      session.unsubscribe?.();
+      await session.runtime?.dispose().catch(() => undefined);
+      await session.closeMcp();
+      throw error;
+    }
   }
 
   // ------------------------------------------------------------------ //
@@ -223,17 +213,11 @@ export class PiAcpSession {
     this._sessionId = sessionManager.getSessionId();
 
     const mcp = await mountMcpServers(options.mcpServers, this.cwd);
-    this.mcpMounts.push(...mcp.mounts);
-    this.mcpDiagnostics = mcp.diagnostics;
+    this.mcpMounts = mcp.mounts;
+    this.resourceDiagnostics.push(...mcp.diagnostics);
 
     this.requestedDirectories = options.additionalDirectories;
 
-    const gate: InlineExtension = {
-      name: ADAPTER_EXTENSION_NAME,
-      factory: (pi: ExtensionAPI) => {
-        pi.on("tool_call", (event) => this.policy.gate(event, (call) => this.requestToolPermission(call)));
-      },
-    };
     // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.
     this.eventBus = createTappedEventBus((channel, data) => this.onExtensionEvent(channel, data));
     // Bundled pi-add-dir backs ACP additionalDirectories; skipped when the user's pi already installs it.
@@ -257,7 +241,6 @@ export class PiAcpSession {
         modelRuntime,
         modelRuntimeSignal: AbortSignal.timeout(15_000),
         resourceLoaderOptions: {
-          extensionFactories: [gate],
           eventBus: this.eventBus,
           ...(bundled !== undefined ? { additionalExtensionPaths: [bundled] } : {}),
         },
@@ -271,6 +254,8 @@ export class PiAcpSession {
             cwd,
             caps: this.features.delegation,
             autoResizeImages: settingsManager.getImageAutoResize(),
+            shellPath: settingsManager.getShellPath(),
+            commandPrefix: settingsManager.getShellCommandPrefix(),
             onTerminal: (toolCallId, terminalId) => {
               const update = this.projection.attachClientTerminal(toolCallId, terminalId);
               if (update !== undefined) this.emit(update);
@@ -340,17 +325,17 @@ export class PiAcpSession {
     this.requestedDirectories = undefined;
     if (requested === undefined || requested.length === 0) return;
     if (!this.known.has("pi-add-dir")) {
-      this.mcpDiagnostics.push(
+      this.resourceDiagnostics.push(
         `warning: additionalDirectories ignored (${requested.join(", ")}): the pi-add-dir extension did not load`,
       );
       return;
     }
     const problems = await applyAdditionalDirectories(this.session, this.cwd, requested);
-    for (const problem of problems) this.mcpDiagnostics.push(`warning: ${problem}`);
+    for (const problem of problems) this.resourceDiagnostics.push(`warning: ${problem}`);
   }
 
   private resolveProjectTrust(cwd: string, agentDir: string): boolean {
-    if (this.settings.trustProjects) return true;
+    if (this.settings.trustProjects || this.trustedProjects.has(cwd)) return true;
     if (!hasTrustRequiringProjectResources(cwd)) return true;
     try {
       const store = new ProjectTrustStore(agentDir);
@@ -371,7 +356,8 @@ export class PiAcpSession {
     if (remember) {
       new ProjectTrustStore(this.runtime.services.agentDir).set(this.cwd, true);
     }
-    this.settings.trustProjects = this.settings.trustProjects || !remember;
+    this.trustedProjects.add(this.cwd);
+    this.session.settingsManager.setProjectTrusted(true);
     await this.session.reload();
   }
 
@@ -484,13 +470,9 @@ export class PiAcpSession {
   // ------------------------------------------------------------------ //
 
   configOptions(): SessionConfigOption[] {
-    return buildConfigOptions(this.session, this.policy.mode, {
+    return buildConfigOptions(this.session, {
       booleanOptions: this.features.booleanConfigOptions,
     });
-  }
-
-  modes(): ReturnType<typeof modeState> {
-    return modeState(this.policy.mode);
   }
 
   availableCommands(): AvailableCommand[] {
@@ -507,10 +489,6 @@ export class PiAcpSession {
     this.emit({ sessionUpdate: "config_option_update", configOptions: this.configOptions() });
   }
 
-  publishMode(): void {
-    this.emit({ sessionUpdate: "current_mode_update", currentModeId: this.policy.mode });
-  }
-
   replayHistory(): void {
     const replay = buildReplay(this.session.sessionManager.buildContextEntries(), this.cwd);
     for (const update of replay.updates) this.emit(update);
@@ -524,11 +502,6 @@ export class PiAcpSession {
     if (title !== undefined) {
       this.emit({ sessionUpdate: "session_info_update", title, updatedAt: new Date().toISOString() });
     }
-  }
-
-  setMode(mode: PermissionMode): void {
-    this.policy.mode = mode;
-    this.publishMode();
   }
 
   async setModel(value: string): Promise<void> {
@@ -548,37 +521,6 @@ export class PiAcpSession {
     const levels = this.session.getAvailableThinkingLevels();
     if (!(levels as string[]).includes(level)) throw invalidParams(`unknown thinking level: ${level}`);
     this.session.setThinkingLevel(level as ThinkingLevel, { persist: true });
-  }
-
-  // ------------------------------------------------------------------ //
-  // Permission requests                                                 //
-  // ------------------------------------------------------------------ //
-
-  private async requestToolPermission(
-    event: ToolCallEvent,
-  ): Promise<ReturnType<typeof decisionFromOptionId>> {
-    const facts = classifyToolCall(event.toolName, event.input, this.cwd);
-    const toolCall: ToolCallUpdate = {
-      toolCallId: event.toolCallId,
-      title: facts.title,
-      kind: facts.kind,
-      status: "pending",
-      rawInput: event.input,
-      ...(facts.locations.length > 0 ? { locations: facts.locations } : {}),
-    };
-    await this.flush();
-    try {
-      const response = await this.conn.requestPermission({
-        sessionId: this._sessionId,
-        toolCall,
-        options: PERMISSION_OPTIONS,
-      });
-      if (response.outcome.outcome === "cancelled") return { decision: "cancelled", remember: false };
-      return decisionFromOptionId(response.outcome.optionId);
-    } catch (error: unknown) {
-      logWarn(`permission request failed: ${errorMessage(error)}`);
-      return { decision: "cancelled", remember: false };
-    }
   }
 
   // ------------------------------------------------------------------ //
@@ -698,11 +640,16 @@ export class PiAcpSession {
     this.closed = true;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    await Promise.allSettled(this.mcpMounts.map((mount) => mount.close()));
     try {
       await this.runtime.dispose();
     } catch (error: unknown) {
       logDebug(`runtime dispose failed: ${errorMessage(error)}`);
     }
+    await this.closeMcp();
+  }
+
+  private async closeMcp(): Promise<void> {
+    const mounts = this.mcpMounts.splice(0);
+    await Promise.allSettled(mounts.map((mount) => mount.close()));
   }
 }

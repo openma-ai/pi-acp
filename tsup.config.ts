@@ -15,5 +15,5 @@ export default defineConfig({
   minify: false,
   // pi and the ACP SDK stay external: sessions, extensions, and credential stores must
   // share one module identity with the installed pi package.
-  external: [/^@earendil-works\//, /^@agentclientprotocol\//, /^@modelcontextprotocol\//, "typebox"],
+  external: [/^@earendil-works\//, /^@agentclientprotocol\//, "typebox"],
 });

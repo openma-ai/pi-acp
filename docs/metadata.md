@@ -160,7 +160,7 @@ A retry start also emits a visible italic `agent_message_chunk` with
 ### Tool attribution
 
 `tool_call` (initial update) carries `_meta.pi.extension: <path>` when the tool
-was registered by a pi extension. Built-in tools, MCP tools (`mcp__*`), and
+was registered by a pi extension. Built-in tools and
 client-delegated tools carry no attribution.
 
 ### Diff metadata
@@ -203,7 +203,7 @@ Entries in `available_commands_update` carry provenance:
 ```
 
 `source` is `extension`, `prompt`, or `skill`. Built-ins that change session
-state (`/mode`, `/model`, `/thinking`, `/autocompact`) carry the Codex-style
+state (`/model`, `/thinking`, `/autocompact`) carry the Codex-style
 display hint `_meta.commandAction = { kind: "setConfigOption", configId, presentation: "state" }`
 so clients can render them as state controls and refresh config options after use.
 

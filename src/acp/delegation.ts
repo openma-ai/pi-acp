@@ -10,6 +10,8 @@
 
 import type { AgentSideConnection, ClientCapabilities } from "@agentclientprotocol/sdk";
 import {
+  detectSupportedImageMimeTypeFromFile,
+  getShellConfig,
   createBashToolDefinition,
   createEditToolDefinition,
   createReadToolDefinition,
@@ -42,6 +44,8 @@ export interface DelegationOptions {
   onTerminal?: (toolCallId: string, terminalId: string) => void;
   /** Shell settings passed through to pi's bash tool when the terminal is not delegated. */
   autoResizeImages?: boolean;
+  shellPath?: string;
+  commandPrefix?: string;
 }
 
 const TERMINAL_POLL_MS = 250;
@@ -58,7 +62,8 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
   const tools: ToolDefinition[] = [];
 
   const readViaClient = async (absolutePath: string): Promise<Buffer> => {
-    if (!isTextLike(absolutePath)) return readFile(absolutePath);
+    if (!isTextLike(absolutePath) || (await detectSupportedImageMimeTypeFromFile(absolutePath)))
+      return readFile(absolutePath);
     try {
       const response = await conn.readTextFile({ sessionId, path: absolutePath });
       return Buffer.from(response.content, "utf8");
@@ -75,7 +80,11 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
     tools.push(
       createReadToolDefinition(cwd, {
         autoResizeImages: options.autoResizeImages,
-        operations: { readFile: readViaClient, access: (path) => access(path) },
+        operations: {
+          readFile: readViaClient,
+          access: (path) => access(path),
+          detectImageMimeType: detectSupportedImageMimeTypeFromFile,
+        },
       }) as unknown as ToolDefinition,
     );
   }
@@ -100,17 +109,27 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
   }
 
   if (caps.terminal) {
-    const bash = createBashToolDefinition(cwd) as unknown as ToolDefinition;
+    const bash = createBashToolDefinition(cwd, {
+      shellPath: options.shellPath,
+      commandPrefix: options.commandPrefix,
+    }) as unknown as ToolDefinition;
     // Reuse pi's schema/description; replace execution with a client terminal.
     tools.push({
       ...bash,
       renderCall: undefined,
       renderResult: undefined,
-      execute: async (toolCallId, params, signal, onUpdate) => {
+      execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+        signal?.throwIfAborted();
         const input = params as { command: string; timeout?: number };
+        const shell = getShellConfig(options.shellPath);
+        // ACP terminals cannot send stdin to legacy WSL bash; retain pi execution there.
+        if (shell.commandTransport === "stdin")
+          return bash.execute(toolCallId, params, signal, onUpdate, ctx);
+        const command = options.commandPrefix ? `${options.commandPrefix}\n${input.command}` : input.command;
         const handle = await conn.createTerminal({
           sessionId,
-          command: input.command,
+          command: shell.shell,
+          args: [...shell.args, command],
           cwd,
           outputByteLimit: 1_000_000,
         });
@@ -122,6 +141,7 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
           void handle.kill().catch(() => undefined);
         };
         signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) onAbort();
         const timeoutMs =
           typeof input.timeout === "number" && input.timeout > 0 ? input.timeout * 1000 : undefined;
         const timer =

@@ -7,11 +7,11 @@
   `pi --mode rpc` subprocess.
 - `src/acp/agent.ts` — ACP protocol methods over a map of live sessions.
 - `src/acp/session.ts` — one ACP session ↔ one pi `AgentSessionRuntime`: runtime
-  creation, permission gate (inline extension), prompt lifecycle, teardown.
+  creation, prompt lifecycle, teardown.
 - `src/acp/translate.ts` — pure projection of pi `AgentSessionEvent`s onto
   `session/update`. `src/acp/history.ts` — pure `session/load` replay.
-- `src/acp/permissions.ts`, `config-options.ts`, `commands.ts`,
-  `builtin-commands.ts`, `ui-context.ts`, `delegation.ts`, `mcp.ts`, `extension-events.ts`
+- `src/acp/config-options.ts`, `commands.ts`,
+  `builtin-commands.ts`, `ui-context.ts`, `delegation.ts`, `extension-events.ts`
   — one concern each.
 - `docs/metadata.md` is the registry for every `_meta` field; update it with
   any wire change.
@@ -38,11 +38,12 @@ npm run build
 npm run format
 ```
 
-Do not add tools, protocol conventions, or semantics pi does not have. If pi
-lacks a primitive, the ACP surface lacks it too — unless a widely used pi
-extension provides it, in which case `src/acp/extensions/` adapts that
-extension's own documented wire shapes (bundled or detected by package
-identity; never both loaded at once). All other extension traffic is
+Do not invent protocol conventions or semantics Pi does not have. Standard ACP
+`mcpServers` connect through the official MCP client and map to Pi's native
+custom-tool API, scoped to the session. `pi-add-dir` backs ACP
+additionalDirectories using the extension's documented wire shapes (bundled
+or detected by package identity; never both loaded at once).
+Do not add adapter tool permission gates or an MCP server runtime. All other extension traffic is
 forwarded as-is, never interpreted.
 
 Do not commit or publish unless asked. Patch releases only unless the

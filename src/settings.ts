@@ -3,13 +3,10 @@
  */
 
 import { isAbsolute, resolve } from "node:path";
-import { DEFAULT_PERMISSION_MODE, isPermissionMode, type PermissionMode } from "./acp/permissions.ts";
 
 export interface Settings {
   /** pi agent dir (`~/.pi/agent`). */
   agentDir: string | undefined;
-  /** Initial permission mode for new sessions. */
-  permissionMode: PermissionMode;
   /** `provider/model[:thinking]` override for new sessions. */
   model: string | undefined;
   /** Emit a startup banner (pi version, resources) into new sessions. */
@@ -32,7 +29,6 @@ Usage: openma-pi-acp [options]
 
 Options:
   --agent-dir <path>        pi config dir (default ~/.pi/agent; env PI_CODING_AGENT_DIR)
-  --permission-mode <m>     read-only | ask | full-access (default ask; env PI_ACP_PERMISSION_MODE)
   --model <provider/id>     Model for new sessions (env PI_ACP_MODEL)
   --session-dir <path>      Session storage dir (env PI_ACP_SESSION_DIR)
   --trust-projects          Load project .pi/ resources everywhere (env PI_ACP_TRUST_PROJECTS=1)
@@ -50,7 +46,6 @@ function envFlag(name: string): boolean | undefined {
 
 export function resolveSettings(argv: readonly string[]): Settings {
   let agentDir = process.env["PI_CODING_AGENT_DIR"];
-  let permissionMode: string | undefined = process.env["PI_ACP_PERMISSION_MODE"];
   let model = process.env["PI_ACP_MODEL"];
   let sessionDir = process.env["PI_ACP_SESSION_DIR"];
   let trustProjects = envFlag("PI_ACP_TRUST_PROJECTS") ?? false;
@@ -79,9 +74,6 @@ export function resolveSettings(argv: readonly string[]): Settings {
       case "--agent-dir":
         agentDir = value();
         break;
-      case "--permission-mode":
-        permissionMode = value();
-        break;
       case "--model":
         model = value();
         break;
@@ -106,13 +98,8 @@ export function resolveSettings(argv: readonly string[]): Settings {
     }
   }
 
-  if (permissionMode !== undefined && !isPermissionMode(permissionMode)) {
-    throw new SettingsError(`invalid --permission-mode: ${permissionMode}`);
-  }
-
   return {
     agentDir: agentDir !== undefined ? (isAbsolute(agentDir) ? agentDir : resolve(agentDir)) : undefined,
-    permissionMode: (permissionMode as PermissionMode | undefined) ?? DEFAULT_PERMISSION_MODE,
     model,
     quietStartup,
     trustProjects,

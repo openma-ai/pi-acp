@@ -1,6 +1,6 @@
 /**
  * End-to-end over an in-memory ACP connection with a faux model: no network,
- * real pi runtime (session files, tools, extensions gate, projection).
+ * real pi runtime (session files, tools, extensions, projection).
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -36,7 +36,7 @@ describe("initialize", () => {
 
 describe("session/new + prompt", () => {
   it("streams text, thinking, and tool calls; returns usage", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     expect(sessionId).toMatch(/[0-9a-f-]{8,}/);
@@ -75,13 +75,13 @@ describe("session/new + prompt", () => {
     expect(harness.permissionRequests).toHaveLength(0);
   });
 
-  it("returns config options and modes; switches model, thinking, and mode", async () => {
+  it("returns config options and switches model and thinking", async () => {
     harness = await Harness.create();
     await harness.initialize();
     const created = await harness.client.newSession({ cwd: harness.workspace, mcpServers: [] });
-    expect(created.modes).toMatchObject({ currentModeId: "ask" });
+    expect(created.modes).toBeUndefined();
     const ids = (created.configOptions ?? []).map((o) => o.id);
-    expect(ids).toEqual(expect.arrayContaining(["mode", "model", "thinking", "auto_compaction"]));
+    expect(ids).toEqual(expect.arrayContaining(["model", "thinking", "auto_compaction"]));
 
     const model = await harness.client.setSessionConfigOption({
       sessionId: created.sessionId,
@@ -104,55 +104,12 @@ describe("session/new + prompt", () => {
       value: "high",
     });
     expect(thinking.configOptions.find((o) => o.id === "thinking")).toMatchObject({ currentValue: "high" });
-
-    await harness.client.setSessionMode({ sessionId: created.sessionId, modeId: "read-only" });
-    await harness.settle();
-    expect(
-      harness
-        .updatesFor(created.sessionId)
-        .some((u) => u.sessionUpdate === "current_mode_update" && u.currentModeId === "read-only"),
-    ).toBe(true);
-    await expect(
-      harness.client.setSessionMode({ sessionId: created.sessionId, modeId: "bogus" }),
-    ).rejects.toThrow();
   });
 });
 
-describe("permissions", () => {
-  it("asks before mutating tools in ask mode and honours rejection", async () => {
-    harness = await Harness.create({
-      onPermission: () => ({ outcome: { outcome: "selected", optionId: "reject-once" } }),
-    });
-    await harness.initialize();
-    const sessionId = await harness.newSession();
-    harness.respond(
-      fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })]),
-      fauxAssistantMessage("ok"),
-    );
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "run" }] });
-    expect(harness.permissionRequests).toHaveLength(1);
-    expect(harness.permissionRequests[0]).toMatchObject({ toolCall: { kind: "execute", title: "echo hi" } });
-    const failed = harness
-      .updatesFor(sessionId)
-      .find((u) => u.sessionUpdate === "tool_call_update" && u.status === "failed");
-    expect(JSON.stringify(failed)).toContain("rejected");
-  });
-
-  it("blocks mutations in read-only mode without asking", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "read-only" } });
-    await harness.initialize();
-    const sessionId = await harness.newSession();
-    harness.respond(
-      fauxAssistantMessage([fauxToolCall("write", { path: "x.txt", content: "no" })]),
-      fauxAssistantMessage("ok"),
-    );
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "write" }] });
-    expect(harness.permissionRequests).toHaveLength(0);
-    expect(existsSync(join(harness.workspace, "x.txt"))).toBe(false);
-  });
-
+describe("native tools", () => {
   it("emits a structured diff for allowed edits", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     const file = join(harness.workspace, "a.txt");
@@ -190,20 +147,13 @@ describe("slash commands", () => {
         .updatesFor(sessionId)
         .some((u) => u.sessionUpdate === "session_info_update" && u.title === "Renamed"),
     ).toBe(true);
-    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "/mode full-access" }] });
     expect(harness.faux.state.callCount).toBe(before);
-    await harness.settle();
-    expect(
-      harness
-        .updatesFor(sessionId)
-        .some((u) => u.sessionUpdate === "current_mode_update" && u.currentModeId === "full-access"),
-    ).toBe(true);
   });
 });
 
 describe("session lifecycle", () => {
   it("lists, loads with replay, resumes, forks, and deletes sessions", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     harness.respond(fauxAssistantMessage("first answer"));
@@ -220,7 +170,7 @@ describe("session lifecycle", () => {
 
     harness.notifications.length = 0;
     const loaded = await harness.client.loadSession({ sessionId, cwd: harness.workspace, mcpServers: [] });
-    expect(loaded.modes).toMatchObject({ currentModeId: "full-access" });
+    expect(loaded.modes).toBeUndefined();
     await harness.settle();
     const replay = harness.updatesFor(sessionId);
     expect(
@@ -254,7 +204,7 @@ describe("session lifecycle", () => {
   });
 
   it("silently restores a session an agent restart forgot", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     harness.respond(fauxAssistantMessage("a"));
@@ -278,7 +228,7 @@ describe("session lifecycle", () => {
 
 describe("cancellation and steering", () => {
   it("cancels a running turn", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     harness.respond(
@@ -293,7 +243,7 @@ describe("cancellation and steering", () => {
   });
 
   it("reports promptRequired when idle and injects when running", async () => {
-    harness = await Harness.create({ settings: { permissionMode: "full-access" } });
+    harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
     const idle = await harness.client.extMethod("_session/steering", {
