@@ -86,6 +86,9 @@ export class PiAcpAgent implements AcpAgent {
   private readonly settings: Settings;
   private readonly sessions = new Map<string, PiAcpSession>();
   private readonly opening = new Map<string, Promise<PiAcpSession>>();
+  private readonly openGenerations = new Map<string, number>();
+  private nextOpenId = 0;
+  private readonly pendingOpens = new Set<Promise<PiAcpSession>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
   private readonly requestIds: RequestIdTracker | undefined;
   private features: ClientFeatures = {
@@ -147,11 +150,17 @@ export class PiAcpAgent implements AcpAgent {
   }
 
   private modelRuntime(): Promise<ModelRuntime> {
-    this.modelRuntimePromise ??= ModelRuntime.create({
-      authPath: `${this.agentDir}/auth.json`,
-      modelsPath: `${this.agentDir}/models.json`,
-      signal: AbortSignal.timeout(15_000),
-    });
+    if (!this.modelRuntimePromise) {
+      const pending = ModelRuntime.create({
+        authPath: `${this.agentDir}/auth.json`,
+        modelsPath: `${this.agentDir}/models.json`,
+        signal: AbortSignal.timeout(15_000),
+      });
+      this.modelRuntimePromise = pending;
+      void pending.catch(() => {
+        if (this.modelRuntimePromise === pending) this.modelRuntimePromise = undefined;
+      });
+    }
     return this.modelRuntimePromise;
   }
 
@@ -164,7 +173,7 @@ export class PiAcpAgent implements AcpAgent {
     this.closed = true;
     const live = [...this.sessions.values()];
     this.sessions.clear();
-    await Promise.allSettled(live.map((session) => session.close()));
+    await Promise.allSettled([...live.map((session) => session.close()), ...this.pendingOpens]);
   }
 
   private assertOpen(): void {
@@ -204,9 +213,13 @@ export class PiAcpAgent implements AcpAgent {
     additionalDirectories?: readonly string[] | null;
     sessionId?: string;
   }): Promise<PiAcpSession> {
-    const key = params.sessionId ?? `pending:${params.cwd}:${params.sessionFile ?? "new"}:${Date.now()}`;
+    const key = params.sessionId ?? `pending:${++this.nextOpenId}`;
+    const generation = (this.openGenerations.get(key) ?? 0) + 1;
+    this.openGenerations.set(key, generation);
+    const isCurrent = () => !this.closed && this.openGenerations.get(key) === generation;
     const promise = (async () => {
       const modelRuntime = await this.modelRuntime();
+      if (!isCurrent()) throw internalError("session open was superseded or closed");
       const existing = params.sessionId !== undefined ? this.sessions.get(params.sessionId) : undefined;
       if (existing !== undefined) {
         this.sessions.delete(params.sessionId!);
@@ -224,18 +237,20 @@ export class PiAcpAgent implements AcpAgent {
         ...(params.fork !== undefined ? { fork: params.fork } : {}),
         reason: params.reason,
       });
-      if (this.closed) {
+      if (!isCurrent()) {
         await session.close();
-        throw internalError("connection closed while opening the session");
+        throw internalError("session open was superseded or closed");
       }
       this.sessions.set(session.sessionId, session);
       return session;
     })();
     this.opening.set(key, promise);
+    this.pendingOpens.add(promise);
     try {
       return await promise;
     } finally {
-      this.opening.delete(key);
+      this.pendingOpens.delete(promise);
+      if (this.opening.get(key) === promise) this.opening.delete(key);
     }
   }
 
@@ -471,6 +486,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionId: params.sessionId,
     });
     session.replayHistory();
+    await session.flush();
     await this.requireModel(session).catch((error: unknown) => {
       logWarn(`loaded session ${params.sessionId} without a usable model: ${errorMessage(error)}`);
     });
@@ -562,6 +578,7 @@ export class PiAcpAgent implements AcpAgent {
   }
 
   async deleteSession(params: DeleteSessionRequest): Promise<void> {
+    this.openGenerations.set(params.sessionId, (this.openGenerations.get(params.sessionId) ?? 0) + 1);
     const live = this.sessions.get(params.sessionId);
     let file = live?.session.sessionFile;
     if (live !== undefined) {
@@ -579,6 +596,7 @@ export class PiAcpAgent implements AcpAgent {
   }
 
   async closeSession(params: CloseSessionRequest): Promise<void> {
+    this.openGenerations.set(params.sessionId, (this.openGenerations.get(params.sessionId) ?? 0) + 1);
     const live = this.sessions.get(params.sessionId);
     if (live === undefined) return;
     this.sessions.delete(params.sessionId);

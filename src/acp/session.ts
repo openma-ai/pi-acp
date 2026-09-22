@@ -85,6 +85,7 @@ export interface SessionOpenOptions {
 }
 
 interface Inflight {
+  settlement?: Promise<void>;
   resolve: (reason: StopReason) => void;
   reject: (error: Error) => void;
 }
@@ -134,6 +135,8 @@ export class PiAcpSession {
   private cancelled = false;
   private readonly trustedProjects = new Set<string>();
   private closed = false;
+  private deliveryError: Error | undefined;
+  private closePromise: Promise<void> | undefined;
   private lastEmit: Promise<void> = Promise.resolve();
   private _sessionId = "";
   private startupDiagnostics: string[] = [];
@@ -449,16 +452,21 @@ export class PiAcpSession {
   // ------------------------------------------------------------------ //
 
   emit(update: SessionUpdate): void {
-    if (this.closed) return;
+    if (this.closed || this.deliveryError) return;
     this.lastEmit = this.lastEmit
-      .then(() => this.conn.sessionUpdate({ sessionId: this._sessionId, update }))
+      .then(() => {
+        if (this.deliveryError) return;
+        return this.conn.sessionUpdate({ sessionId: this._sessionId, update });
+      })
       .catch((error: unknown) => {
-        logDebug(`session/update failed: ${errorMessage(error)}`);
+        this.deliveryError ??= error instanceof Error ? error : new Error(String(error));
+        logWarn(`session/update failed: ${errorMessage(error)}`);
       });
   }
 
-  flush(): Promise<void> {
-    return this.lastEmit;
+  async flush(): Promise<void> {
+    await this.lastEmit;
+    if (this.deliveryError) throw this.deliveryError;
   }
 
   text(text: string): void {
@@ -533,6 +541,12 @@ export class PiAcpSession {
   }
 
   async prompt(text: string, images: Parameters<AgentSession["steer"]>[1]): Promise<StopReason> {
+    if (this.closed || this.closePromise) throw internalError("session is closing or closed");
+    if (this.deliveryError) throw this.deliveryError;
+    if (this.inflight?.settlement) {
+      await this.inflight.settlement;
+      return this.prompt(text, images);
+    }
     if (this.inflight !== undefined) {
       await this.steer(text, images);
       return "end_turn";
@@ -577,8 +591,7 @@ export class PiAcpSession {
 
   private settle(): void {
     const inflight = this.inflight;
-    if (inflight === undefined) return;
-    this.inflight = undefined;
+    if (inflight === undefined || inflight.settlement) return;
     const changes = this.projection.fileChanges();
     if (changes.length > 0) {
       this.emit({
@@ -594,21 +607,27 @@ export class PiAcpSession {
         _meta: piMeta({ event: "failure", kind: failureKind, message: error }),
       });
     }
-    void this.flush().finally(() => {
-      if (this.cancelled) {
-        inflight.resolve("cancelled");
-        return;
-      }
-      if (error !== undefined) {
-        inflight.reject(
-          failureKind === "auth_required"
-            ? authRequired(error, piMeta({ assistantError: true, failure: failureKind }))
-            : internalError(error, piMeta({ assistantError: true, failure: failureKind })),
-        );
-        return;
-      }
-      inflight.resolve(assistantStopReasonToAcp(this.projection.lastAssistant));
-    });
+    const cancelled = this.cancelled;
+    const stopReason = assistantStopReasonToAcp(this.projection.lastAssistant);
+    inflight.settlement = this.flush()
+      .then(
+        () => {
+          if (cancelled) inflight.resolve("cancelled");
+          else if (error !== undefined)
+            inflight.reject(
+              failureKind === "auth_required"
+                ? authRequired(error, piMeta({ assistantError: true, failure: failureKind }))
+                : internalError(error, piMeta({ assistantError: true, failure: failureKind })),
+            );
+          else inflight.resolve(stopReason);
+        },
+        (failure: unknown) => {
+          inflight.reject(internalError(`session delivery failed: ${errorMessage(failure)}`));
+        },
+      )
+      .finally(() => {
+        if (this.inflight === inflight) this.inflight = undefined;
+      });
   }
 
   async cancel(): Promise<void> {
@@ -627,7 +646,12 @@ export class PiAcpSession {
     if (this.inflight !== undefined && this.session.isIdle) this.settle();
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closePromise ??= this.closeOnce();
+    return this.closePromise;
+  }
+
+  private async closeOnce(): Promise<void> {
     if (this.closed) return;
     this.cancelled = true;
     try {
@@ -636,7 +660,7 @@ export class PiAcpSession {
       // ignore
     }
     if (this.inflight !== undefined) this.settle();
-    await this.flush();
+    await this.flush().catch((error: unknown) => logDebug(`close delivery failed: ${errorMessage(error)}`));
     this.closed = true;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
