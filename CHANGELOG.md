@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5 — 2026-10-02
+
+- `session/set_config_option` for `model` and `thinking`, legacy `session/set_model`,
+  `/model`, and `/thinking` change the current session only. `settings.json` keeps
+  its `defaultProvider`, `defaultModel`, and `defaultThinkingLevel`.
+- `_meta.pi.persist: true` on `session/set_config_option` or `session/set_model`
+  also stores that choice as pi's global default.
+
 ## 0.1.4 — 2026-10-02
 
 - `additionalDirectories` is an opt-in filesystem scope. When the client sends the

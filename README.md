@@ -49,8 +49,9 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   **display terminal** when the client supports one (`_meta.terminal_output`).
 - **Native pi execution** — tools run with pi’s own behavior; the adapter adds no tool approval modes.
 - **Config options** — model (grouped by provider, live from pi's model runtime), thinking
-  level (only when the model reasons), auto-compaction toggle. Model/thinking changes persist
-  as pi defaults, like the pi TUI.
+  level (only when the model reasons), auto-compaction toggle. Model and thinking changes
+  apply to the current session. `_meta.pi.persist: true` on `session/set_config_option` or
+  `session/set_model` also saves them as pi's global defaults.
 - **Usage** — `usage_update` per assistant message with context size and cost; aggregate
   `usage` on every `session/prompt` response.
 - **Compaction and retries** — `compaction_update` for manual/automatic compaction; auto-retry
@@ -79,8 +80,10 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   become `elicitation/create` forms, with a `session/request_permission` fallback for
   select/confirm on clients without form elicitation. Notifications, status, and widgets
   travel as `session_info_update` metadata.
-- **Steering** — `_session/steering` injects into a running turn (`{ outcome: "injected" }`)
-  or answers `promptRequired` when idle; a concurrent `session/prompt` while a turn runs
+- **Steering** — `_session/steering` injects at the next LLM boundary of a running turn
+  (`{ outcome: "injected" }`), the same delivery as Enter in pi's editor, or answers
+  `promptRequired` when idle. A follow-up that should wait until the turn ends (Alt+Enter)
+  is a later `session/prompt`. A concurrent `session/prompt` while a turn is still running
   is delivered as a pi steer.
 - **Real cancellation** — `session/cancel` aborts the turn, queued messages, bash, compaction,
   and retries.

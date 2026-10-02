@@ -588,30 +588,39 @@ export class PiAcpSession {
     }
   }
 
-  async setModel(value: string): Promise<void> {
+  async setModel(value: string, options?: { persist?: boolean }): Promise<void> {
     const models = [...this.session.modelRuntime.getAvailableSnapshot()];
     const model = findModel(models, value);
     if (model === undefined) throw invalidParams(`unknown model: ${value}`);
-    if (this.session.model !== undefined && modelValue(this.session.model) === modelValue(model)) return;
+    const unchanged =
+      this.session.model !== undefined && modelValue(this.session.model) === modelValue(model);
+    // Same model and no request to save a global default: leave pi's settings alone.
+    if (unchanged && options?.persist !== true) return;
     try {
-      await this.session.setModel(model, { persist: true });
+      // persist defaults to false in pi: session transcript only, not ~/.pi/agent/settings.json.
+      await this.session.setModel(model, { persist: options?.persist === true });
     } catch (error: unknown) {
       throw invalidParams(`cannot switch to ${value}: ${errorMessage(error)}`);
     }
     this.projection.setContextWindow(model.contextWindow);
   }
 
-  setThinking(level: string): void {
+  setThinking(level: string, options?: { persist?: boolean }): void {
     const levels = this.session.getAvailableThinkingLevels();
     if (!(levels as string[]).includes(level)) throw invalidParams(`unknown thinking level: ${level}`);
-    this.session.setThinkingLevel(level as ThinkingLevel, { persist: true });
+    this.session.setThinkingLevel(level as ThinkingLevel, { persist: options?.persist === true });
   }
 
   // ------------------------------------------------------------------ //
   // Prompt lifecycle                                                    //
   // ------------------------------------------------------------------ //
 
-  /** Inject into the running turn (steer) — used by concurrent prompts and `_session/steering`. */
+  /**
+   * Pi steer: deliver after the current assistant turn finishes its tool calls,
+   * before the next model call. Used by `_session/steering` and by a concurrent
+   * `session/prompt`. A follow-up that should wait until the turn ends is a
+   * later `session/prompt` from the client (pi's Alt+Enter), not this path.
+   */
   async steer(text: string, images: Parameters<AgentSession["steer"]>[1]): Promise<void> {
     await this.session.steer(text, images);
   }
