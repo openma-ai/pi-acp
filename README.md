@@ -49,9 +49,8 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   **display terminal** when the client supports one (`_meta.terminal_output`).
 - **Native pi execution** — tools run with pi’s own behavior; the adapter adds no tool approval modes.
 - **Config options** — model (grouped by provider, live from pi's model runtime), thinking
-  level (only when the model reasons), auto-compaction toggle. Model and thinking changes
-  apply to the current session. `_meta.pi.persist: true` on `session/set_config_option` or
-  `session/set_model` also saves them as pi's global defaults.
+  level (only when the model reasons), auto-compaction toggle. Model/thinking changes persist
+  as pi defaults, like the pi TUI.
 - **Usage** — `usage_update` per assistant message with context size and cost; aggregate
   `usage` on every `session/prompt` response.
 - **Compaction and retries** — `compaction_update` for manual/automatic compaction; auto-retry

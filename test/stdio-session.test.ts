@@ -57,7 +57,7 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   }
 }
 
-it("switches models and steers over stdio without rewriting settings.json", async () => {
+it("persists a model switch over stdio and steers at the next model call", async () => {
   root = mkdtempSync(join(tmpdir(), "pi-acp-stdio-"));
   const agentDir = join(root, "agent");
   const sessionDir = join(root, "sessions");
@@ -119,14 +119,22 @@ it("switches models and steers over stdio without rewriting settings.json", asyn
     });
     const model = switched.configOptions.find((option) => option.id === "model");
     expect(model && "currentValue" in model ? model.currentValue : undefined).toBe("faux/faux-2");
-    expect(sha256(settings)).toBe(before);
+    expect(sha256(settings)).not.toBe(before);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toMatchObject({
+      defaultProvider: "faux",
+      defaultModel: "faux-2",
+    });
 
     await client.setSessionConfigOption({
       sessionId,
       configId: "model",
       value: "faux/faux-1",
     });
-    expect(sha256(settings)).toBe(before);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toMatchObject({
+      defaultProvider: "faux",
+      defaultModel: "faux-1",
+    });
+    const afterModel = sha256(settings);
 
     const promptPromise = client.prompt({
       sessionId,
@@ -142,7 +150,7 @@ it("switches models and steers over stdio without rewriting settings.json", asyn
     writeFileSync(gate, "go\n");
     const response = await promptPromise;
     expect(response.stopReason).toBe("end_turn");
-    expect(sha256(settings)).toBe(before);
+    expect(sha256(settings)).toBe(afterModel);
 
     const calls = readFileSync(callLog, "utf8")
       .trim()
@@ -153,7 +161,7 @@ it("switches models and steers over stdio without rewriting settings.json", asyn
     expect(calls[0]?.text).not.toContain("STEER_TOKEN");
     expect(calls[1]?.text).toContain("STEER_TOKEN from the user");
     expect(calls[1]?.model).toBe("faux/faux-1");
-    expect(readFileSync(settings, "utf8")).not.toContain("faux-2");
+    expect(JSON.parse(readFileSync(settings, "utf8")).defaultModel).toBe("faux-1");
   } catch (error) {
     const detail = Buffer.concat(stderr).toString("utf8");
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${detail}`);

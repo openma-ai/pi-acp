@@ -244,7 +244,7 @@ User-installed extensions are forwarded as-is. They do not implement ACP
 | `_session/steering` | `{ sessionId, prompt, _meta?: { steering?: { idleBehavior?: "promptRequired" } } }` | `{ outcome: "injected" }` or `{ outcome: "promptRequired", reason: "noRunningTurn" }`                                           |
 | `_pi/trust_project` | `{ sessionId, remember?: boolean }`                                                 | `{ trusted: true }` — loads the project's `.pi/` resources                                                                      |
 | `_pi/add_directory` | `{ sessionId, path }`                                                               | `{ additionalDirectories: string[] }` — append one absolute root (max 16), turn the boundary on, and persist it                 |
-| `session/set_model` | `{ sessionId, modelId, _meta?: { pi?: { persist?: true } } }`                       | `{}` — legacy alias for the `model` config option. Session-only unless `_meta.pi.persist` is `true`.                            |
+| `session/set_model` | `{ sessionId, modelId }`                                                            | `{}` — legacy alias for the `model` config option                                                                               |
 | `_pi/emit_event`    | `{ sessionId, channel, data? }`                                                     | `{}` — publishes on the session's extension event bus (the reverse of `extension_event`; the injected event is not echoed back) |
 
 `_session/steering` injects into the running turn at the next LLM boundary: after
@@ -254,13 +254,6 @@ session is idle the result is `promptRequired` and the client sends an ordinary
 `session/prompt`. A follow-up that should wait until the turn ends (pi's
 Alt+Enter) is that later `session/prompt`.
 
-## Session config persistence
-
 `session/set_config_option` for `model` and `thinking`, legacy `session/set_model`,
-and the `/model` and `/thinking` commands change the current session only. They
-do not write `defaultProvider`, `defaultModel`, or `defaultThinkingLevel` in
-pi's `settings.json`.
-
-To also save the choice as pi's global default, send `_meta.pi.persist: true`
-on `session/set_config_option` or `session/set_model`. Slash commands stay
-session-only.
+and `/model` / `/thinking` also write pi's global defaults (`defaultProvider`,
+`defaultModel`, `defaultThinkingLevel` in `settings.json`), the same as the pi TUI.

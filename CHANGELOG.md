@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Model and thinking changes again persist as pi's global defaults
+  (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), matching the pi TUI.
+  This restores the behavior kept when issue #3 was closed as not planned.
+
 ## 0.1.5 — 2026-10-02
 
 - `session/set_config_option` for `model` and `thinking`, legacy `session/set_model`,
