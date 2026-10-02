@@ -98,14 +98,25 @@ logged or persisted as transcript content.
 pi; correlate by channel namespace.
 
 `additionalDirectories` echoes the canonical extra roots in filesystem scope for
-this session (not including `cwd`). The same list is the standard
+this session (not including `cwd`). The same active list is the standard
 `session/list` `SessionInfo.additionalDirectories` field. `cwd` remains the only
-project root for skills and AGENTS.md. Paths outside `cwd` plus these roots are
-rejected for `read`, `write`, `edit`, `grep`, `find`, `ls`, and `bash`.
+project root for skills and AGENTS.md.
 
-`session/load` and `session/resume` restore the persisted list when the field is
-omitted. An empty array clears it. A non-empty array replaces it. Filesystem
-roots, `$HOME`, and malformed entries reject the request.
+The path boundary is opt-in. It applies to `read`, `write`, `edit`, `grep`,
+`find`, `ls`, and `bash` only when the client sent `additionalDirectories`
+(including `[]`) or set `_meta.pi.restoreAdditionalDirectories` to `true`.
+Omitting the field leaves tool access as it was before this capability: paths
+outside `cwd` are not rejected. `additionalDirectoriesEnforced` is `true` when
+the boundary is on.
+
+`session/load`, `session/resume`, and `session/fork` follow the stable ACP rule:
+omitting `additionalDirectories` activates no additional roots and does not
+inherit a previously stored list. An empty array is an explicit cwd-only
+boundary. A non-empty array replaces the list and turns the boundary on.
+`_meta.pi.restoreAdditionalDirectories: true`, sent without the field, restores
+the last explicit list and turns the boundary on. Filesystem roots, `$HOME`,
+and malformed entries reject the request. `session/list` reports only the
+active list, so it is `[]` after an omit.
 
 `diagnostics` lists non-fatal startup problems (extension load errors, untrusted
 project resources, unavailable MCP servers).
@@ -232,7 +243,7 @@ User-installed extensions are forwarded as-is. They do not implement ACP
 | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `_session/steering` | `{ sessionId, prompt, _meta?: { steering?: { idleBehavior?: "promptRequired" } } }` | `{ outcome: "injected" }` or `{ outcome: "promptRequired", reason: "noRunningTurn" }`                                           |
 | `_pi/trust_project` | `{ sessionId, remember?: boolean }`                                                 | `{ trusted: true }` — loads the project's `.pi/` resources                                                                      |
-| `_pi/add_directory` | `{ sessionId, path }`                                                               | `{ additionalDirectories: string[] }` — append one absolute root (max 16) and persist it                                        |
+| `_pi/add_directory` | `{ sessionId, path }`                                                               | `{ additionalDirectories: string[] }` — append one absolute root (max 16), turn the boundary on, and persist it                 |
 | `session/set_model` | `{ sessionId, modelId }`                                                            | `{}` — legacy alias for the `model` config option                                                                               |
 | `_pi/emit_event`    | `{ sessionId, channel, data? }`                                                     | `{}` — publishes on the session's extension event bus (the reverse of `extension_event`; the injected event is not echoed back) |
 

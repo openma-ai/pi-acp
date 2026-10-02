@@ -18,12 +18,18 @@ afterEach(async () => {
 
 function piMeta(response: { _meta?: unknown }): {
   additionalDirectories?: string[];
+  additionalDirectoriesEnforced?: boolean;
   sessionFile?: string;
   diagnostics?: string[];
 } {
   return (
     response._meta as {
-      pi: { additionalDirectories?: string[]; sessionFile?: string; diagnostics?: string[] };
+      pi: {
+        additionalDirectories?: string[];
+        additionalDirectoriesEnforced?: boolean;
+        sessionFile?: string;
+        diagnostics?: string[];
+      };
     }
   ).pi;
 }
@@ -92,6 +98,7 @@ describe("additionalDirectories client flow", () => {
     const sessionId = created.sessionId;
     const roots = [realpathSync(lib), realpathSync(docs)];
     expect(piMeta(created).additionalDirectories).toEqual(roots);
+    expect(piMeta(created).additionalDirectoriesEnforced).toBe(true);
 
     let systemPrompt = "";
     harness.respond((context) => {
@@ -124,6 +131,9 @@ describe("additionalDirectories client flow", () => {
     expect(failedTools(sessionId)).toContain(join(outside, "secret.txt"));
     expect(JSON.stringify(harness.updatesFor(sessionId))).not.toContain("secret\\n");
 
+    await turn(sessionId, fauxToolCall("bash", { command: 'echo "see /tmp"' }));
+    expect(failedTools(sessionId)).toContain("/tmp");
+
     await turn(sessionId, fauxToolCall("bash", { command: `cat ${join(lib, "a.txt")}` }));
     expect(JSON.stringify(harness.updatesFor(sessionId))).toContain("from-lib");
 
@@ -145,9 +155,33 @@ describe("additionalDirectories client flow", () => {
 
     harness.notifications.length = 0;
     const loaded = await harness.client.loadSession({ sessionId, cwd: harness.workspace, mcpServers: [] });
-    expect(piMeta(loaded).additionalDirectories).toEqual(roots);
+    expect(piMeta(loaded).additionalDirectories).toEqual([]);
+    expect(piMeta(loaded).additionalDirectoriesEnforced).toBe(false);
+    await turn(sessionId, fauxToolCall("read", { path: join(outside, "secret.txt") }));
+    expect(JSON.stringify(harness.updatesFor(sessionId))).toContain("secret\\n");
+    const listedAfterOmit = await harness.client.listSessions({ cwd: harness.workspace });
+    expect(
+      listedAfterOmit.sessions.find((session) => session.sessionId === sessionId)?.additionalDirectories,
+    ).toEqual([]);
+
+    const restored = await harness.client.loadSession({
+      sessionId,
+      cwd: harness.workspace,
+      mcpServers: [],
+      _meta: { pi: { restoreAdditionalDirectories: true } },
+    });
+    expect(piMeta(restored).additionalDirectories).toEqual(roots);
+    expect(piMeta(restored).additionalDirectoriesEnforced).toBe(true);
+    const forked = await harness.client.unstable_forkSession({ sessionId, cwd: harness.workspace });
+    expect(piMeta(forked).additionalDirectories).toEqual([]);
+    expect(piMeta(forked).additionalDirectoriesEnforced).toBe(false);
+    await turn(forked.sessionId, fauxToolCall("read", { path: join(outside, "secret.txt") }));
+    expect(JSON.stringify(harness.updatesFor(forked.sessionId))).toContain("secret\\n");
+
     await turn(sessionId, fauxToolCall("read", { path: join(docs, "out.txt") }));
     expect(JSON.stringify(harness.updatesFor(sessionId))).toContain("wrote-docs");
+    await turn(sessionId, fauxToolCall("read", { path: join(outside, "secret.txt") }));
+    expect(failedTools(sessionId)).toContain("outside the session workspace");
 
     const grown = await harness.client.extMethod("_pi/add_directory", { sessionId, path: notes });
     expect(grown).toEqual({ additionalDirectories: [...roots, realpathSync(notes)] });
@@ -166,12 +200,43 @@ describe("additionalDirectories client flow", () => {
       additionalDirectories: [],
     });
     expect(piMeta(cleared).additionalDirectories).toEqual([]);
+    expect(piMeta(cleared).additionalDirectoriesEnforced).toBe(true);
     await turn(sessionId, fauxToolCall("read", { path: join(lib, "a.txt") }));
     expect(failedTools(sessionId)).toContain("outside the session workspace");
     const listedAfterClear = await harness.client.listSessions({ cwd: harness.workspace });
     expect(
       listedAfterClear.sessions.find((session) => session.sessionId === sessionId)?.additionalDirectories,
     ).toEqual([]);
+  });
+
+  it("keeps legacy access when additionalDirectories is omitted", async () => {
+    harness = await Harness.create();
+    await harness.initialize();
+    const outside = join(harness.root, "outside");
+    const notes = join(harness.root, "notes");
+    mkdirSync(outside, { recursive: true });
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(outside, "secret.txt"), "secret\n");
+    writeFileSync(join(notes, "c.txt"), "from-notes\n");
+    const created = await harness.client.newSession({ cwd: harness.workspace, mcpServers: [] });
+    expect(piMeta(created).additionalDirectories).toEqual([]);
+    expect(piMeta(created).additionalDirectoriesEnforced).toBe(false);
+
+    await turn(created.sessionId, fauxToolCall("read", { path: join(outside, "secret.txt") }));
+    expect(JSON.stringify(harness.updatesFor(created.sessionId))).toContain("secret\\n");
+    await turn(created.sessionId, fauxToolCall("bash", { command: 'echo "see /tmp"' }));
+    expect(failedTools(created.sessionId)).not.toContain("outside the session workspace");
+    expect(JSON.stringify(harness.updatesFor(created.sessionId))).toContain("see /tmp");
+
+    const grown = await harness.client.extMethod("_pi/add_directory", {
+      sessionId: created.sessionId,
+      path: notes,
+    });
+    expect(grown).toEqual({ additionalDirectories: [realpathSync(notes)] });
+    await turn(created.sessionId, fauxToolCall("read", { path: join(outside, "secret.txt") }));
+    expect(failedTools(created.sessionId)).toContain("outside the session workspace");
+    await turn(created.sessionId, fauxToolCall("read", { path: join(notes, "c.txt") }));
+    expect(JSON.stringify(harness.updatesFor(created.sessionId))).toContain("from-notes");
   });
 
   it("does not ask a delegated client to read outside the roots", async () => {

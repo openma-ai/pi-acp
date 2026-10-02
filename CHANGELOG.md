@@ -2,18 +2,22 @@
 
 ## 0.1.4 — 2026-10-02
 
-- `additionalDirectories` is a real filesystem scope. Extra roots join `cwd` for
-  `read`, `write`, `edit`, `grep`, `find`, `ls`, and `bash`. Paths outside that
-  set, including symlink escapes, are rejected. The primary `cwd` stays the only
-  project root for skills and AGENTS.md.
+- `additionalDirectories` is an opt-in filesystem scope. When the client sends the
+  field, including `[]`, extra roots join `cwd` for `read`, `write`, `edit`, `grep`,
+  `find`, `ls`, and `bash`. Paths outside that set, including symlink escapes, are
+  rejected. Omitting the field leaves tool access unchanged. The primary `cwd` stays
+  the only project root for skills and AGENTS.md.
 - Filesystem roots and `$HOME` are rejected. Malformed entries reject the whole
-  request. When the scope check cannot be probed, the capability is omitted and
-  a non-empty list is warned and ignored.
-- The accepted list is stored on the session and returned by `session/list` as
-  `additionalDirectories`. `session/load` and `session/resume` restore it when
-  the field is omitted; `[]` clears it. Responses still echo
-  `_meta.pi.additionalDirectories`.
-- `_pi/add_directory` appends one root to a live session (at most 16).
+  request. When the scope check cannot be probed, the capability is omitted and a
+  sent field is warned and ignored.
+- The active list is stored on the session and returned by `session/list` as
+  `additionalDirectories`. `session/load`, `session/resume`, and `session/fork`
+  activate no additional roots when the field is omitted. `[]` is a cwd-only
+  boundary. `_meta.pi.restoreAdditionalDirectories: true` restores the last explicit
+  list. Responses echo `_meta.pi.additionalDirectories` and
+  `additionalDirectoriesEnforced`.
+- `_pi/add_directory` appends one root to a live session and turns the boundary on
+  (at most 16).
 
 ## 0.1.1 — 2026-09-22
 

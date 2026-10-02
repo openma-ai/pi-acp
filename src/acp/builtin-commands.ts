@@ -41,8 +41,12 @@ export async function runBuiltinCommand(
         ["Auto-compaction", pi.autoCompactionEnabled ? "on" : "off"],
         ["Workspace", session.cwd],
         [
-          "Additional directories",
-          session.additionalDirectories.length > 0 ? session.additionalDirectories.join(", ") : "(none)",
+          "Workspace scope",
+          session.additionalDirectoriesEnforced
+            ? session.additionalDirectories.length > 0
+              ? session.additionalDirectories.join(", ")
+              : "cwd only"
+            : "unbounded",
         ],
         ["Session", `${pi.sessionId}${pi.sessionFile !== undefined ? ` — ${pi.sessionFile}` : ""}`],
         [

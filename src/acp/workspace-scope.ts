@@ -34,10 +34,22 @@ export class AdditionalDirectoriesError extends Error {
 }
 
 export interface DirectoryPlan {
-  /** `restore` reloads the list persisted on the session branch. */
-  kind: "explicit" | "restore" | "ignored";
+  /**
+   * `off`: the field was omitted. No path boundary; pi keeps its previous
+   * access behavior. `explicit`: the client sent the field, including `[]`.
+   * `restore`: `_meta.pi.restoreAdditionalDirectories` asked for the saved list.
+   * `ignored`: the scope check is unavailable, so a sent field is warned and dropped.
+   */
+  kind: "off" | "explicit" | "restore" | "ignored";
   directories: string[];
   warning?: string;
+}
+
+export interface AdditionalDirectoriesRecord {
+  /** Last explicit list, kept so a later restore request can read it. */
+  directories: string[];
+  /** True when that list is the active boundary. False leaves tool access unbounded. */
+  enforced: boolean;
 }
 
 interface LooseEntry {
@@ -62,6 +74,7 @@ export function additionalDirectoriesSupported(): boolean {
     const secret = join(outside, "secret.txt");
     writeFileSync(secret, "secret\n");
     const scope = new WorkspaceScope(inside);
+    scope.enforced = true;
     const created = scope.denial(join(inside, "new.txt"));
     const leaked = scope.denial(secret);
     supportedCache = created === undefined && leaked !== undefined;
@@ -80,31 +93,30 @@ export function additionalDirectoriesCapability(): Record<string, never> | undef
 
 /**
  * Turn a lifecycle `additionalDirectories` value into a plan.
- * Unsupported agents warn and ignore, matching the pre-capability behaviour.
- * An omitted field restores the persisted list when `restoreWhenOmitted` is set
- * (`session/load`, `session/resume`, `session/fork`); `session/new` treats omit as none.
- * An empty array clears. Malformed or unauthorized entries reject the whole request.
+ * Omitting the field does not enable the boundary (ACP RFD: no additional roots).
+ * `restore: true` is only meaningful when the field is omitted; a present field,
+ * including `[]`, is the complete explicit list and turns the boundary on.
+ * Unsupported agents warn and ignore a present field.
  */
 export function resolveAdditionalDirectoriesRequest(
   requested: readonly string[] | null | undefined,
   cwd: string,
-  options: { supported: boolean; restoreWhenOmitted: boolean },
+  options: { supported: boolean; restore: boolean },
 ): DirectoryPlan {
   const omitted = requested === undefined || requested === null;
   if (!options.supported) {
-    if (!omitted && requested.length > 0) {
+    if (!omitted) {
+      const listed = requested.length > 0 ? ` (${requested.join(", ")})` : "";
       return {
         kind: "ignored",
         directories: [],
-        warning: `additionalDirectories ignored (${requested.join(", ")}): workspace scope is unavailable`,
+        warning: `additionalDirectories ignored${listed}: workspace scope is unavailable`,
       };
     }
     return { kind: "ignored", directories: [] };
   }
   if (omitted) {
-    return options.restoreWhenOmitted
-      ? { kind: "restore", directories: [] }
-      : { kind: "explicit", directories: [] };
+    return options.restore ? { kind: "restore", directories: [] } : { kind: "off", directories: [] };
   }
   return { kind: "explicit", directories: validateAdditionalDirectories(requested, cwd) };
 }
@@ -162,8 +174,12 @@ export function isFilesystemRoot(filePath: string): boolean {
   }
 }
 
-/** Latest `pi-acp:additional-directories` entry on the active branch (leaf → root). */
-export function persistedAdditionalDirectories(entries: readonly LooseEntry[]): string[] {
+const EMPTY_RECORD: AdditionalDirectoriesRecord = { directories: [], enforced: false };
+
+/** Latest additional-directories entry on the active branch (leaf → root). */
+export function persistedAdditionalDirectoriesRecord(
+  entries: readonly LooseEntry[],
+): AdditionalDirectoriesRecord {
   let leaf: LooseEntry | undefined;
   const byId = new Map<string, LooseEntry>();
   for (const entry of entries) {
@@ -179,15 +195,28 @@ export function persistedAdditionalDirectories(entries: readonly LooseEntry[]): 
       seen.add(current.id);
     }
     if (current.type === "custom" && current.customType === ADDITIONAL_DIRECTORIES_ENTRY) {
-      return directoriesFromData(current.data);
+      return recordFromData(current.data);
     }
     current = typeof current.parentId === "string" ? byId.get(current.parentId) : undefined;
   }
-  return [];
+  return EMPTY_RECORD;
+}
+
+/** Active roots reported by `session/list`. Empty when the boundary is off. */
+export function persistedAdditionalDirectories(entries: readonly LooseEntry[]): string[] {
+  const record = persistedAdditionalDirectoriesRecord(entries);
+  return record.enforced ? record.directories : [];
+}
+
+/** Last explicit list, including one that a later omit deactivated. */
+export function savedAdditionalDirectories(entries: readonly LooseEntry[]): string[] {
+  return persistedAdditionalDirectoriesRecord(entries).directories;
 }
 
 export class WorkspaceScope {
   readonly cwd: string;
+  /** Set only after the client opts in with `additionalDirectories` or the restore meta. */
+  enforced = false;
   private extra: string[] = [];
 
   constructor(cwd: string) {
@@ -206,8 +235,9 @@ export class WorkspaceScope {
     this.extra = [...directories];
   }
 
-  /** `undefined` when `input` is inside a root. Relative paths resolve against `cwd`. */
+  /** `undefined` when the boundary is off, or when `input` is inside a root. */
   denial(input: string): string | undefined {
+    if (!this.enforced) return undefined;
     let canonical: string;
     try {
       canonical = canonicalAccessPath(input, this.cwd);
@@ -218,8 +248,9 @@ export class WorkspaceScope {
     return `path is outside the session workspace: ${canonical}`;
   }
 
-  /** `undefined` when every path the command names is inside a root (or a shell device). */
+  /** `undefined` when the boundary is off, or every named path is inside a root or a shell device. */
   shellDenial(command: string): string | undefined {
+    if (!this.enforced) return undefined;
     const scan = shellAccessPaths(command);
     if (scan.unverifiable.length > 0) {
       return `command references a path the session cannot verify: ${scan.unverifiable[0]}`;
@@ -242,6 +273,7 @@ export function workspaceScopeExtension(scope: WorkspaceScope): InlineExtension 
       return undefined;
     });
     pi.on("before_agent_start", (event) => {
+      if (!scope.enforced) return undefined;
       const extra = scope.additionalDirectories;
       if (extra.length === 0) return undefined;
       const note = [
@@ -379,11 +411,15 @@ export function shellAccessPaths(command: string): { paths: string[]; unverifiab
   return { paths, unverifiable };
 }
 
-function directoriesFromData(data: unknown): string[] {
-  if (data === null || typeof data !== "object") return [];
-  const dirs = (data as { directories?: unknown }).directories;
-  if (!Array.isArray(dirs)) return [];
-  return dirs.filter((dir): dir is string => typeof dir === "string" && dir.length > 0);
+function recordFromData(data: unknown): AdditionalDirectoriesRecord {
+  if (data === null || typeof data !== "object") return EMPTY_RECORD;
+  const record = data as { directories?: unknown; enforced?: unknown };
+  const directories = Array.isArray(record.directories)
+    ? record.directories.filter((dir): dir is string => typeof dir === "string" && dir.length > 0)
+    : [];
+  const enforced =
+    record.enforced === false ? false : record.enforced === true ? true : directories.length > 0;
+  return { directories, enforced };
 }
 
 function homeDirectory(): string | undefined {

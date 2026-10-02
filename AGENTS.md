@@ -41,10 +41,13 @@ npm run format
 Do not invent protocol conventions or semantics Pi does not have. Standard ACP
 `mcpServers` connect through the official MCP client and map to Pi's native
 custom-tool API, scoped to the session. ACP `additionalDirectories` widen filesystem
-scope (read/write/edit/grep/find/ls/bash) around `cwd`; the primary `cwd` stays the
-project for skills and AGENTS.md. Persist the list on the session and echo it from
-`session/list`. Advertise `sessionCapabilities.additionalDirectories` only when that
-scope check works; otherwise warn and ignore the field.
+scope (read/write/edit/grep/find/ls/bash) around `cwd` only when the client sends the
+field, including `[]`. Omitting it keeps pi's existing path behavior. The primary `cwd`
+stays the project for skills and AGENTS.md. `load` / `resume` / `fork` follow the ACP
+RFD: an omitted field activates no additional roots. `_meta.pi.restoreAdditionalDirectories`
+restores the persisted list. Echo the active list from `session/list`. Advertise
+`sessionCapabilities.additionalDirectories` only when that scope check works; otherwise
+warn and ignore the field.
 Do not add adapter tool approval prompts or an MCP server runtime. All other extension traffic is
 forwarded as-is, never interpreted.
 

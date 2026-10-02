@@ -12,6 +12,7 @@ import {
   AdditionalDirectoriesError,
   MAX_ADDITIONAL_DIRECTORIES,
   persistedAdditionalDirectories,
+  savedAdditionalDirectories,
   resolveAdditionalDirectoriesRequest,
   shellAccessPaths,
   validateAdditionalDirectories,
@@ -35,9 +36,7 @@ describe("additionalDirectories policy", () => {
   });
 
   it("warns and ignores the field when the scope check is unavailable", () => {
-    expect(
-      resolveAdditionalDirectoriesRequest(["/tmp"], cwd, { supported: false, restoreWhenOmitted: false }),
-    ).toEqual({
+    expect(resolveAdditionalDirectoriesRequest(["/tmp"], cwd, { supported: false, restore: false })).toEqual({
       kind: "ignored",
       directories: [],
       warning: expect.stringContaining("workspace scope is unavailable"),
@@ -67,16 +66,14 @@ describe("additionalDirectories policy", () => {
     expect(() => validateAdditionalDirectories(dirs, cwd)).toThrow(/at most 16/);
   });
 
-  it("restores on omit for load and treats omit as empty for new", () => {
+  it("leaves an omitted field unbounded and treats [] as an explicit empty boundary", () => {
     expect(
-      resolveAdditionalDirectoriesRequest(undefined, cwd, { supported: true, restoreWhenOmitted: true }).kind,
-    ).toBe("restore");
-    expect(
-      resolveAdditionalDirectoriesRequest(undefined, cwd, { supported: true, restoreWhenOmitted: false }),
-    ).toEqual({ kind: "explicit", directories: [] });
-    expect(
-      resolveAdditionalDirectoriesRequest([], cwd, { supported: true, restoreWhenOmitted: true }),
-    ).toEqual({
+      resolveAdditionalDirectoriesRequest(undefined, cwd, { supported: true, restore: false }).kind,
+    ).toBe("off");
+    expect(resolveAdditionalDirectoriesRequest(undefined, cwd, { supported: true, restore: true }).kind).toBe(
+      "restore",
+    );
+    expect(resolveAdditionalDirectoriesRequest([], cwd, { supported: true, restore: true })).toEqual({
       kind: "explicit",
       directories: [],
     });
@@ -109,6 +106,18 @@ describe("additionalDirectories policy", () => {
       },
     ];
     expect(persistedAdditionalDirectories(entries)).toEqual(["/new"]);
+    const deactivated = [
+      ...entries,
+      {
+        type: "custom",
+        id: "d",
+        parentId: "c",
+        customType: "pi-acp:additional-directories",
+        data: { directories: ["/new"], enforced: false },
+      },
+    ];
+    expect(persistedAdditionalDirectories(deactivated)).toEqual([]);
+    expect(savedAdditionalDirectories(deactivated)).toEqual(["/new"]);
   });
 
   it("rejects symlink escapes and allows paths inside cwd or an extra root", () => {
@@ -119,6 +128,9 @@ describe("additionalDirectories policy", () => {
     symlinkSync(join(outside, "secret.txt"), join(cwd, "leak.txt"));
     symlinkSync(join(outside, "missing"), join(cwd, "broken"));
     const scope = new WorkspaceScope(cwd);
+    expect(scope.denial(join(outside, "secret.txt"))).toBeUndefined();
+    expect(scope.shellDenial('echo "see /tmp"')).toBeUndefined();
+    scope.enforced = true;
     scope.setAdditional([realpathSync(extra)]);
     expect(scope.denial("note.txt")).toBeUndefined();
     expect(scope.denial(join(extra, "a.txt"))).toBeUndefined();

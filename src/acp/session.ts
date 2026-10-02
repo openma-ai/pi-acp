@@ -54,7 +54,8 @@ import {
   ADDITIONAL_DIRECTORIES_ENTRY,
   AdditionalDirectoriesError,
   additionalDirectoriesSupported,
-  persistedAdditionalDirectories,
+  persistedAdditionalDirectoriesRecord,
+  savedAdditionalDirectories,
   scopeExtensionLoaded,
   validateAdditionalDirectories,
   workspaceScopeExtension,
@@ -138,6 +139,7 @@ export class PiAcpSession {
   private eventBus: TappedEventBus | undefined;
   private readonly scope: WorkspaceScope;
   private readonly directoryPlan: DirectoryPlan;
+  private scopeReady = false;
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
@@ -184,33 +186,41 @@ export class PiAcpSession {
 
   /** Canonical additional roots currently in filesystem scope (not including `cwd`). */
   get additionalDirectories(): string[] {
-    return this.scope.additionalDirectories;
+    return this.scope.enforced ? this.scope.additionalDirectories : [];
   }
 
-  /** Why a shell command is outside the session roots, if it is. */
+  /** True only when this session opted into the path boundary. */
+  get additionalDirectoriesEnforced(): boolean {
+    return this.scope.enforced;
+  }
+
+  /** Why a shell command is outside the session roots, if the boundary is on. */
   shellDenial(command: string): string | undefined {
-    if (!additionalDirectoriesSupported()) return undefined;
     return this.scope.shellDenial(command);
   }
 
   /**
-   * Grow the persisted root list (`_pi/add_directory`). Same policy as a lifecycle
-   * request: absolute, not a filesystem root, not `$HOME`, at most 16.
+   * Grow the persisted root list (`_pi/add_directory`) and turn the boundary on.
+   * Same policy as a lifecycle request: absolute, not a filesystem root, not `$HOME`, at most 16.
    */
   addAdditionalDirectory(filePath: string): string[] {
     if (!additionalDirectoriesSupported()) throw invalidParams("additionalDirectories are not available");
+    if (!this.scopeReady) throw invalidParams("workspace scope is not loaded");
     let next: string[];
     try {
-      next = validateAdditionalDirectories([...this.scope.additionalDirectories, filePath], this.cwd);
+      next = validateAdditionalDirectories(
+        [...(this.scope.enforced ? this.scope.additionalDirectories : []), filePath],
+        this.cwd,
+      );
     } catch (error: unknown) {
       if (error instanceof AdditionalDirectoriesError) throw invalidParams(error.message);
       throw error;
     }
-    if (!sameDirectories(next, this.scope.additionalDirectories)) {
-      this.scope.setAdditional(next);
-      this.session.sessionManager.appendCustomEntry(ADDITIONAL_DIRECTORIES_ENTRY, { directories: next });
-    }
-    return this.scope.additionalDirectories;
+    const changed = !this.scope.enforced || !sameDirectories(next, this.scope.additionalDirectories);
+    this.scope.enforced = true;
+    this.scope.setAdditional(next);
+    if (changed) this.persistDirectoryRecord(next, true);
+    return this.additionalDirectories;
   }
 
   static async open(options: SessionOpenOptions): Promise<PiAcpSession> {
@@ -347,42 +357,61 @@ export class PiAcpSession {
     this.installDirectories(scopeEnabled);
   }
 
-  /** Apply the lifecycle plan and persist it when the active list changes. */
+  /**
+   * Apply the lifecycle plan. The boundary stays off unless the client sent
+   * `additionalDirectories` or `_meta.pi.restoreAdditionalDirectories`.
+   */
   private installDirectories(scopeEnabled: boolean): void {
-    if (!scopeEnabled) {
-      if (this.directoryPlan.warning !== undefined) {
-        logWarn(this.directoryPlan.warning);
-        this.resourceDiagnostics.push(`warning: ${this.directoryPlan.warning}`);
-      }
+    const plan = this.directoryPlan;
+    if (plan.warning !== undefined) {
+      logWarn(plan.warning);
+      this.resourceDiagnostics.push(`warning: ${plan.warning}`);
+    }
+    if (scopeEnabled) {
+      const loaded = this.session.resourceLoader
+        .getExtensions()
+        .extensions.map((extension) => extension.path);
+      this.scopeReady = scopeExtensionLoaded(loaded);
+    }
+    if (!scopeEnabled || plan.kind === "ignored" || plan.kind === "off") {
+      this.scope.enforced = false;
+      this.scope.setAdditional([]);
+      if (scopeEnabled && plan.kind === "off") this.deactivateSavedDirectories();
       return;
     }
-    const loaded = this.session.resourceLoader.getExtensions().extensions.map((extension) => extension.path);
-    if (!scopeExtensionLoaded(loaded)) {
-      throw internalError(
-        "workspace scope failed to load; refusing to open a session without a path boundary",
-      );
+    if (!this.scopeReady) {
+      throw internalError("workspace scope failed to load; refusing to enforce a path boundary");
     }
-    let directories = this.directoryPlan.directories;
-    if (this.directoryPlan.kind === "restore") {
-      const persisted = persistedAdditionalDirectories(this.session.sessionManager.getBranch());
+    let directories = plan.directories;
+    if (plan.kind === "restore") {
+      const saved = savedAdditionalDirectories(this.session.sessionManager.getBranch());
       try {
-        directories = validateAdditionalDirectories(persisted, this.cwd);
+        directories = validateAdditionalDirectories(saved, this.cwd);
       } catch (error: unknown) {
         if (error instanceof AdditionalDirectoriesError) throw invalidParams(error.message);
         throw error;
       }
-    } else if (this.directoryPlan.kind === "ignored") {
-      directories = [];
-      if (this.directoryPlan.warning !== undefined) {
-        logWarn(this.directoryPlan.warning);
-        this.resourceDiagnostics.push(`warning: ${this.directoryPlan.warning}`);
-      }
     }
+    this.scope.enforced = true;
     this.scope.setAdditional(directories);
-    const persisted = persistedAdditionalDirectories(this.session.sessionManager.getBranch());
-    if (!sameDirectories(persisted, directories) && (directories.length > 0 || persisted.length > 0)) {
-      this.session.sessionManager.appendCustomEntry(ADDITIONAL_DIRECTORIES_ENTRY, { directories });
-    }
+    this.persistDirectoryRecord(directories, true);
+  }
+
+  /** Keep the saved list for a later restore, but stop reporting or enforcing it. */
+  private deactivateSavedDirectories(): void {
+    const branch = this.session.sessionManager.getBranch();
+    const record = persistedAdditionalDirectoriesRecord(branch);
+    if (!record.enforced) return;
+    this.persistDirectoryRecord(record.directories, false);
+  }
+
+  private persistDirectoryRecord(directories: readonly string[], enforced: boolean): void {
+    const record = persistedAdditionalDirectoriesRecord(this.session.sessionManager.getBranch());
+    if (record.enforced === enforced && sameDirectories(record.directories, directories)) return;
+    this.session.sessionManager.appendCustomEntry(ADDITIONAL_DIRECTORIES_ENTRY, {
+      directories: [...directories],
+      enforced,
+    });
   }
 
   private resolveProjectTrust(cwd: string, agentDir: string): boolean {

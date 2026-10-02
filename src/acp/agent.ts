@@ -209,7 +209,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "resume",
       mcpServers: undefined,
-      directoryPlan: directoryPlanOf(undefined, stored.cwd, true),
+      directoryPlan: directoryPlanOf(undefined, stored.cwd, undefined),
       sessionId,
     });
   }
@@ -452,7 +452,7 @@ export class PiAcpAgent implements AcpAgent {
       cwd: params.cwd,
       reason: "new",
       mcpServers: params.mcpServers,
-      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, false),
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, params._meta),
     });
     try {
       await this.requireModel(session);
@@ -477,7 +477,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: session.session.sessionFile ?? null,
         diagnostics: session.diagnostics,
         extensions: session.extensions(),
-        additionalDirectories: session.additionalDirectories,
+        ...directoryEcho(session),
       }),
     };
   }
@@ -492,7 +492,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "load",
       mcpServers: params.mcpServers,
-      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, true),
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, params._meta),
       sessionId: params.sessionId,
     });
     session.replayHistory();
@@ -507,7 +507,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: stored.path,
         diagnostics: session.diagnostics,
         extensions: session.extensions(),
-        additionalDirectories: session.additionalDirectories,
+        ...directoryEcho(session),
       }),
     };
   }
@@ -522,7 +522,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "resume",
       mcpServers: params.mcpServers,
-      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, true),
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, params._meta),
       sessionId: params.sessionId,
     });
     await this.requireModel(session).catch((error: unknown) => {
@@ -535,7 +535,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: stored.path,
         diagnostics: session.diagnostics,
         extensions: session.extensions(),
-        additionalDirectories: session.additionalDirectories,
+        ...directoryEcho(session),
       }),
     };
   }
@@ -553,7 +553,7 @@ export class PiAcpAgent implements AcpAgent {
       fork: true,
       reason: "fork",
       mcpServers: params.mcpServers ?? undefined,
-      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, true),
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, params._meta),
     });
     await this.requireModel(session).catch((error: unknown) => {
       logWarn(`forked session without a usable model: ${errorMessage(error)}`);
@@ -566,7 +566,7 @@ export class PiAcpAgent implements AcpAgent {
         sessionFile: session.session.sessionFile ?? null,
         forkedFrom: params.sessionId,
         extensions: session.extensions(),
-        additionalDirectories: session.additionalDirectories,
+        ...directoryEcho(session),
       }),
     };
   }
@@ -791,15 +791,27 @@ function validateCwd(cwd: string): void {
   if (!existsSync(cwd)) throw invalidParams(`cwd does not exist: ${cwd}`);
 }
 
+function directoryEcho(session: PiAcpSession): {
+  additionalDirectories: string[];
+  additionalDirectoriesEnforced: boolean;
+} {
+  return {
+    additionalDirectories: session.additionalDirectories,
+    additionalDirectoriesEnforced: session.additionalDirectoriesEnforced,
+  };
+}
+
 function directoryPlanOf(
   requested: readonly string[] | null | undefined,
   cwd: string,
-  restoreWhenOmitted: boolean,
+  meta: unknown,
 ): DirectoryPlan {
+  const omitted = requested === undefined || requested === null;
+  const restore = omitted && readPiMeta(meta)?.["restoreAdditionalDirectories"] === true;
   try {
     return resolveAdditionalDirectoriesRequest(requested, cwd, {
       supported: additionalDirectoriesSupported(),
-      restoreWhenOmitted,
+      restore,
     });
   } catch (error: unknown) {
     if (error instanceof AdditionalDirectoriesError) throw invalidParams(error.message);
