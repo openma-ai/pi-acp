@@ -1,6 +1,6 @@
 /**
- * Session-scoped model/thinking changes, and `_session/steering` delivered
- * through the real pi runtime (faux model, real ACP session).
+ * Model/thinking changes persist as pi's global defaults, and `_session/steering`
+ * is delivered through the real pi runtime (faux model, real ACP session).
  */
 
 import { createHash } from "node:crypto";
@@ -58,8 +58,20 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   }
 }
 
-describe("session config does not rewrite pi settings", () => {
-  it("keeps settings.json bytes identical while the live session changes model and thinking", async () => {
+function readSettings(path: string): {
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultThinkingLevel?: string;
+} {
+  return JSON.parse(readFileSync(path, "utf8")) as {
+    defaultProvider?: string;
+    defaultModel?: string;
+    defaultThinkingLevel?: string;
+  };
+}
+
+describe("model and thinking changes persist as pi defaults", () => {
+  it("writes settings.json and switches the live session, including the next model call", async () => {
     harness = await Harness.create();
     await harness.initialize();
     const sessionId = await harness.newSession();
@@ -81,18 +93,22 @@ describe("session config does not rewrite pi settings", () => {
     });
     expect(currentValue(thinking.configOptions, "thinking")).toBe(nextThinking);
     expect(live.session.thinkingLevel).toBe(nextThinking);
-    expect(sha256(path)).toBe(before);
+    expect(sha256(path)).not.toBe(before);
+    expect(readSettings(path).defaultThinkingLevel).toBe(nextThinking);
 
     const otherThinking = levels.find((level) => level !== nextThinking);
     expect(otherThinking).toBeDefined();
+    const thinkingBeforeSlash = sha256(path);
     const slashThinking = await harness.client.prompt({
       sessionId,
       prompt: [{ type: "text", text: `/thinking ${otherThinking}` }],
     });
     expect(slashThinking.stopReason).toBe("end_turn");
     expect(live.session.thinkingLevel).toBe(otherThinking);
-    expect(sha256(path)).toBe(before);
+    expect(sha256(path)).not.toBe(thinkingBeforeSlash);
+    expect(readSettings(path).defaultThinkingLevel).toBe(otherThinking);
 
+    const modelBefore = sha256(path);
     const switched = await harness.client.setSessionConfigOption({
       sessionId,
       configId: "model",
@@ -101,23 +117,28 @@ describe("session config does not rewrite pi settings", () => {
     expect(currentValue(switched.configOptions, "model")).toBe("faux/faux-2");
     expect(live.session.model?.provider).toBe("faux");
     expect(live.session.model?.id).toBe("faux-2");
-    expect(sha256(path)).toBe(before);
+    expect(sha256(path)).not.toBe(modelBefore);
+    expect(readSettings(path)).toMatchObject({ defaultProvider: "faux", defaultModel: "faux-2" });
 
+    const legacyBefore = sha256(path);
     const legacy = await harness.client.extMethod("session/set_model", {
       sessionId,
       modelId: "faux/faux-1",
     });
     expect(legacy).toEqual({});
     expect(live.session.model?.id).toBe("faux-1");
-    expect(sha256(path)).toBe(before);
+    expect(sha256(path)).not.toBe(legacyBefore);
+    expect(readSettings(path).defaultModel).toBe("faux-1");
 
+    const slashBefore = sha256(path);
     const slashModel = await harness.client.prompt({
       sessionId,
       prompt: [{ type: "text", text: "/model faux/faux-2" }],
     });
     expect(slashModel.stopReason).toBe("end_turn");
     expect(live.session.model?.id).toBe("faux-2");
-    expect(sha256(path)).toBe(before);
+    expect(sha256(path)).not.toBe(slashBefore);
+    expect(readSettings(path)).toMatchObject({ defaultProvider: "faux", defaultModel: "faux-2" });
 
     let seenModel: string | undefined;
     harness.respond((context, _options, _state, model: Model<string>) => {
@@ -131,56 +152,6 @@ describe("session config does not rewrite pi settings", () => {
     });
     expect(prompted.stopReason).toBe("end_turn");
     expect(seenModel).toBe("faux/faux-2");
-    expect(sha256(path)).toBe(before);
-    expect(readFileSync(path, "utf8")).not.toContain("faux-2");
-  });
-
-  it("writes global defaults only when _meta.pi.persist is true", async () => {
-    harness = await Harness.create();
-    await harness.initialize();
-    const sessionId = await harness.newSession();
-    await harness.settle();
-    const path = settingsPath(harness);
-    const before = sha256(path);
-
-    await harness.client.setSessionConfigOption({
-      sessionId,
-      configId: "model",
-      value: "faux/faux-2",
-      _meta: { pi: { persist: true } },
-    });
-    expect(sha256(path)).not.toBe(before);
-    const saved = JSON.parse(readFileSync(path, "utf8")) as {
-      defaultProvider?: string;
-      defaultModel?: string;
-      defaultThinkingLevel?: string;
-    };
-    expect(saved.defaultProvider).toBe("faux");
-    expect(saved.defaultModel).toBe("faux-2");
-
-    const live = harness.agent["sessions"].get(sessionId)!;
-    await harness.client.extMethod("session/set_model", {
-      sessionId,
-      modelId: "faux/faux-1",
-      _meta: { pi: { persist: true } },
-    });
-    expect(live.session.model?.id).toBe("faux-1");
-    const afterModel = JSON.parse(readFileSync(path, "utf8")) as { defaultModel?: string };
-    expect(afterModel.defaultModel).toBe("faux-1");
-
-    const levels = live.session.getAvailableThinkingLevels();
-    const nextThinking = levels.find((level) => level !== live.session.thinkingLevel);
-    expect(nextThinking).toBeDefined();
-    const thinkingBefore = sha256(path);
-    await harness.client.setSessionConfigOption({
-      sessionId,
-      configId: "thinking",
-      value: nextThinking!,
-      _meta: { pi: { persist: true } },
-    });
-    expect(sha256(path)).not.toBe(thinkingBefore);
-    const afterThinking = JSON.parse(readFileSync(path, "utf8")) as { defaultThinkingLevel?: string };
-    expect(afterThinking.defaultThinkingLevel).toBe(nextThinking);
   });
 });
 

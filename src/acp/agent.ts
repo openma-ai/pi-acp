@@ -674,12 +674,12 @@ export class PiAcpAgent implements AcpAgent {
       case CONFIG_MODEL: {
         if (typeof value !== "string") throw invalidParams("model must be a string");
         if (session.isRunning) throw invalidParams("cannot switch models while a turn is running");
-        await session.setModel(value, { persist: wantsPersist(params._meta) });
+        await session.setModel(value);
         break;
       }
       case CONFIG_THINKING: {
         if (typeof value !== "string") throw invalidParams("thinking level must be a string");
-        session.setThinking(value, { persist: wantsPersist(params._meta) });
+        session.setThinking(value);
         break;
       }
       case CONFIG_AUTO_COMPACTION: {
@@ -711,7 +711,7 @@ export class PiAcpAgent implements AcpAgent {
       throw invalidParams(`${LEGACY_SET_MODEL_METHOD} requires sessionId and modelId`);
     const session = await this.requireOrRestore(sessionId);
     if (session.isRunning) throw invalidParams("cannot switch models while a turn is running");
-    await session.setModel(modelId, { persist: wantsPersist(params["_meta"]) });
+    await session.setModel(modelId);
     session.publishConfigOptions();
     return {};
   }
@@ -785,11 +785,6 @@ export class PiAcpAgent implements AcpAgent {
     session.publishCommands();
     return { trusted: true };
   }
-}
-
-/** `_meta.pi.persist: true` saves the choice as pi's global default. Otherwise session-only. */
-function wantsPersist(meta: unknown): boolean {
-  return readPiMeta(meta)?.["persist"] === true;
 }
 
 function validateCwd(cwd: string): void {

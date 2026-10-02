@@ -588,27 +588,23 @@ export class PiAcpSession {
     }
   }
 
-  async setModel(value: string, options?: { persist?: boolean }): Promise<void> {
+  async setModel(value: string): Promise<void> {
     const models = [...this.session.modelRuntime.getAvailableSnapshot()];
     const model = findModel(models, value);
     if (model === undefined) throw invalidParams(`unknown model: ${value}`);
-    const unchanged =
-      this.session.model !== undefined && modelValue(this.session.model) === modelValue(model);
-    // Same model and no request to save a global default: leave pi's settings alone.
-    if (unchanged && options?.persist !== true) return;
+    if (this.session.model !== undefined && modelValue(this.session.model) === modelValue(model)) return;
     try {
-      // persist defaults to false in pi: session transcript only, not ~/.pi/agent/settings.json.
-      await this.session.setModel(model, { persist: options?.persist === true });
+      await this.session.setModel(model, { persist: true });
     } catch (error: unknown) {
       throw invalidParams(`cannot switch to ${value}: ${errorMessage(error)}`);
     }
     this.projection.setContextWindow(model.contextWindow);
   }
 
-  setThinking(level: string, options?: { persist?: boolean }): void {
+  setThinking(level: string): void {
     const levels = this.session.getAvailableThinkingLevels();
     if (!(levels as string[]).includes(level)) throw invalidParams(`unknown thinking level: ${level}`);
-    this.session.setThinkingLevel(level as ThinkingLevel, { persist: options?.persist === true });
+    this.session.setThinkingLevel(level as ThinkingLevel, { persist: true });
   }
 
   // ------------------------------------------------------------------ //
