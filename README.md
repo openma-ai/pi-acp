@@ -55,9 +55,10 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `usage` on every `session/prompt` response.
 - **Compaction and retries** — `compaction_update` for manual/automatic compaction; auto-retry
   notices; queued-message state.
-- **Additional directories** — pi has no multi-root primitive and the adapter invents none: the
-  [`pi-add-dir`](https://pi.dev/packages/pi-add-dir) extension is bundled and loaded into every
-  session, and ACP `additionalDirectories` run its `/add-dir` flow (AGENTS.md, CLAUDE.md, skills).
+- **Additional directories** — `sessionCapabilities.additionalDirectories` is advertised only
+  when the path boundary is working. `cwd` stays the project root for skills and AGENTS.md.
+  `additionalDirectories` widens read/write/search/bash scope, is persisted on the session,
+  and comes back from `session/list`. `_pi/add_directory` grows the list for a live session.
   Other extensions are forwarded as-is.
 - **Sessions** — `session/list` (pi's own store, filtered by cwd), `session/load` with full
   history replay (compaction-aware branch), `session/resume` without replay, `session/fork`,

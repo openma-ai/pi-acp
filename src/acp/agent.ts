@@ -66,12 +66,21 @@ import type { RequestIdTracker } from "./request-ids.ts";
 import { PiAcpSession, type ClientFeatures } from "./session.ts";
 import { findSession, listSessions, toAcpSessionInfo } from "./sessions-index.ts";
 import { buildStartupInfo } from "./startup-info.ts";
+import {
+  AdditionalDirectoriesError,
+  additionalDirectoriesCapability,
+  additionalDirectoriesSupported,
+  resolveAdditionalDirectoriesRequest,
+  type DirectoryPlan,
+} from "./workspace-scope.ts";
 
 const LIST_PAGE_SIZE = 100;
 /** Upper bound for an interactive provider login (browser round trip, device code polling). */
 const AUTH_FLOW_TIMEOUT_MS = 10 * 60 * 1000;
 /** Legacy extension method some clients still send instead of `session/set_config_option`. */
 const LEGACY_SET_MODEL_METHOD = "session/set_model";
+/** Grow the persisted additional-root list of a live session. */
+const ADD_DIRECTORY_METHOD = "_pi/add_directory";
 
 export interface PiAcpAgentOptions {
   settings: Settings;
@@ -200,6 +209,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "resume",
       mcpServers: undefined,
+      directoryPlan: directoryPlanOf(undefined, stored.cwd, true),
       sessionId,
     });
   }
@@ -210,7 +220,7 @@ export class PiAcpAgent implements AcpAgent {
     fork?: boolean;
     reason: "new" | "load" | "resume" | "fork";
     mcpServers: readonly NewSessionRequest["mcpServers"][number][] | undefined;
-    additionalDirectories?: readonly string[] | null;
+    directoryPlan: DirectoryPlan;
     sessionId?: string;
   }): Promise<PiAcpSession> {
     const key = params.sessionId ?? `pending:${++this.nextOpenId}`;
@@ -232,7 +242,7 @@ export class PiAcpAgent implements AcpAgent {
         modelRuntime,
         features: this.features,
         mcpServers: params.mcpServers,
-        ...(params.additionalDirectories ? { additionalDirectories: params.additionalDirectories } : {}),
+        directoryPlan: params.directoryPlan,
         ...(params.sessionFile !== undefined ? { sessionFile: params.sessionFile } : {}),
         ...(params.fork !== undefined ? { fork: params.fork } : {}),
         reason: params.reason,
@@ -328,8 +338,8 @@ export class PiAcpAgent implements AcpAgent {
           fork: {},
           resume: {},
           close: {},
-          // Backed by the bundled pi-add-dir extension (see extensions/pi-add-dir.ts).
-          additionalDirectories: {},
+          // Present only when the path boundary is real (see workspace-scope.ts).
+          ...(additionalDirectoriesCapability() !== undefined ? { additionalDirectories: {} } : {}),
         },
         auth: { logout: {} },
         _meta: {
@@ -442,7 +452,7 @@ export class PiAcpAgent implements AcpAgent {
       cwd: params.cwd,
       reason: "new",
       mcpServers: params.mcpServers,
-      additionalDirectories: params.additionalDirectories,
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, false),
     });
     try {
       await this.requireModel(session);
@@ -482,7 +492,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "load",
       mcpServers: params.mcpServers,
-      additionalDirectories: params.additionalDirectories,
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, true),
       sessionId: params.sessionId,
     });
     session.replayHistory();
@@ -512,7 +522,7 @@ export class PiAcpAgent implements AcpAgent {
       sessionFile: stored.path,
       reason: "resume",
       mcpServers: params.mcpServers,
-      additionalDirectories: params.additionalDirectories,
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, true),
       sessionId: params.sessionId,
     });
     await this.requireModel(session).catch((error: unknown) => {
@@ -543,7 +553,7 @@ export class PiAcpAgent implements AcpAgent {
       fork: true,
       reason: "fork",
       mcpServers: params.mcpServers ?? undefined,
-      additionalDirectories: params.additionalDirectories,
+      directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, true),
     });
     await this.requireModel(session).catch((error: unknown) => {
       logWarn(`forked session without a usable model: ${errorMessage(error)}`);
@@ -687,6 +697,7 @@ export class PiAcpAgent implements AcpAgent {
   async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (method === "_session/steering") return this.steering(params);
     if (method === "_pi/trust_project") return this.trustProject(params);
+    if (method === ADD_DIRECTORY_METHOD) return this.addDirectory(params);
     if (method === "_pi/emit_event") return this.emitEvent(params);
     if (method === LEGACY_SET_MODEL_METHOD) return this.legacySetModel(params);
     throw RequestError.methodNotFound(method);
@@ -746,6 +757,23 @@ export class PiAcpAgent implements AcpAgent {
     return {};
   }
 
+  /** `_pi/add_directory`: append one root to a live session and persist it. */
+  private async addDirectory(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!additionalDirectoriesSupported()) throw invalidParams("additionalDirectories are not available");
+    const sessionId = params["sessionId"];
+    const path = params["path"];
+    if (
+      typeof sessionId !== "string" ||
+      sessionId.length === 0 ||
+      typeof path !== "string" ||
+      path.length === 0
+    ) {
+      throw invalidParams(`${ADD_DIRECTORY_METHOD} requires sessionId and path`);
+    }
+    const session = await this.requireOrRestore(sessionId);
+    return { additionalDirectories: session.addAdditionalDirectory(path) };
+  }
+
   /** `_pi/trust_project`: trust the session cwd (optionally remembered) and reload resources. */
   private async trustProject(params: Record<string, unknown>): Promise<Record<string, unknown>> {
     const sessionId = params["sessionId"];
@@ -761,4 +789,20 @@ export class PiAcpAgent implements AcpAgent {
 function validateCwd(cwd: string): void {
   if (!isAbsolute(cwd)) throw invalidParams(`cwd must be an absolute path: ${cwd}`);
   if (!existsSync(cwd)) throw invalidParams(`cwd does not exist: ${cwd}`);
+}
+
+function directoryPlanOf(
+  requested: readonly string[] | null | undefined,
+  cwd: string,
+  restoreWhenOmitted: boolean,
+): DirectoryPlan {
+  try {
+    return resolveAdditionalDirectoriesRequest(requested, cwd, {
+      supported: additionalDirectoriesSupported(),
+      restoreWhenOmitted,
+    });
+  } catch (error: unknown) {
+    if (error instanceof AdditionalDirectoriesError) throw invalidParams(error.message);
+    throw error;
+  }
 }

@@ -7,7 +7,9 @@
 
 import type { SessionInfo } from "@agentclientprotocol/sdk";
 import { SessionManager, type SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { logDebug } from "../log.ts";
+import { persistedAdditionalDirectories } from "./workspace-scope.ts";
 
 export interface SessionIndexEntry {
   sessionId: string;
@@ -15,6 +17,8 @@ export interface SessionIndexEntry {
   path: string;
   title: string | undefined;
   updatedAt: string;
+  /** Canonical additional roots persisted on the session branch. Empty when none were stored. */
+  additionalDirectories: string[];
 }
 
 function toEntry(info: PiSessionInfo): SessionIndexEntry {
@@ -25,7 +29,49 @@ function toEntry(info: PiSessionInfo): SessionIndexEntry {
     path: info.path,
     title: title !== undefined && title.length > 0 ? title : undefined,
     updatedAt: info.modified.toISOString(),
+    additionalDirectories: readPersistedDirectories(info.path),
   };
+}
+
+function readPersistedDirectories(sessionFile: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(sessionFile, "utf8");
+  } catch {
+    return [];
+  }
+  const entries: {
+    type: string;
+    id?: string;
+    parentId?: string | null;
+    customType?: string;
+    data?: unknown;
+  }[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(line) as {
+        type?: unknown;
+        id?: unknown;
+        parentId?: unknown;
+        customType?: unknown;
+        data?: unknown;
+      };
+      if (typeof parsed.type !== "string") continue;
+      entries.push({
+        type: parsed.type,
+        ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+        ...(typeof parsed.parentId === "string" || parsed.parentId === null
+          ? { parentId: parsed.parentId }
+          : {}),
+        ...(typeof parsed.customType === "string" ? { customType: parsed.customType } : {}),
+        ...(parsed.data !== undefined ? { data: parsed.data } : {}),
+      });
+    } catch {
+      // A torn last line is ignored; earlier entries still describe the branch.
+    }
+  }
+  return persistedAdditionalDirectories(entries);
 }
 
 export async function listSessions(options: {
@@ -53,6 +99,7 @@ export function toAcpSessionInfo(entry: SessionIndexEntry): SessionInfo {
   return {
     sessionId: entry.sessionId,
     cwd: entry.cwd,
+    additionalDirectories: entry.additionalDirectories,
     ...(entry.title !== undefined ? { title: entry.title } : {}),
     updatedAt: entry.updatedAt,
   };

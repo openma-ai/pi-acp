@@ -97,12 +97,15 @@ logged or persisted as transcript content.
 `custom_entry`. Event-bus traffic (`extension_event`) has no sender identity in
 pi; correlate by channel namespace.
 
-`additionalDirectories` echoes the workspace roots tracked by the
-[pi-add-dir](https://pi.dev/packages/pi-add-dir) extension for this session.
-pi has no multi-root primitive; the adapter bundles pi-add-dir and loads it into
-every session (unless the user's pi settings already install it), and ACP
-`additionalDirectories` are applied by running its `/add-dir <path>` command.
-Rejected entries appear in `diagnostics`.
+`additionalDirectories` echoes the canonical extra roots in filesystem scope for
+this session (not including `cwd`). The same list is the standard
+`session/list` `SessionInfo.additionalDirectories` field. `cwd` remains the only
+project root for skills and AGENTS.md. Paths outside `cwd` plus these roots are
+rejected for `read`, `write`, `edit`, `grep`, `find`, `ls`, and `bash`.
+
+`session/load` and `session/resume` restore the persisted list when the field is
+omitted. An empty array clears it. A non-empty array replaces it. Filesystem
+roots, `$HOME`, and malformed entries reject the request.
 
 `diagnostics` lists non-fatal startup problems (extension load errors, untrusted
 project resources, unavailable MCP servers).
@@ -218,17 +221,10 @@ Forms generated for pi extension dialogs include the original request:
 `ui` is `select`, `confirm`, `input`, or `editor`. The standard form schema is
 complete on its own.
 
-## Known third-party extensions
+## Extensions
 
-pi lacks a multi-root primitive. Rather than inventing one, the adapter bundles
-the extension that provides it
-(by package identity in settings and in the loaded-extension inventory) and
-maps that extension's own wire shapes onto ACP. Absent the extension, the ACP
-feature is absent.
-
-| Extension                                          | ACP surface                                                                                                                                                                                                                                                                                          |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`pi-add-dir`](https://pi.dev/packages/pi-add-dir) | Bundled dependency, loaded into every session unless already installed by pi. `sessionCapabilities.additionalDirectories`; requested roots run `/add-dir <path>`; state read from its `add-dir:state` entry; `/add-dir`, `/remove-dir`, `/dirs` and the `add_directory` tool are available as usual. |
+User-installed extensions are forwarded as-is. They do not implement ACP
+`additionalDirectories`; that scope is enforced by the adapter.
 
 ## Extension methods
 
@@ -236,6 +232,7 @@ feature is absent.
 | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `_session/steering` | `{ sessionId, prompt, _meta?: { steering?: { idleBehavior?: "promptRequired" } } }` | `{ outcome: "injected" }` or `{ outcome: "promptRequired", reason: "noRunningTurn" }`                                           |
 | `_pi/trust_project` | `{ sessionId, remember?: boolean }`                                                 | `{ trusted: true }` — loads the project's `.pi/` resources                                                                      |
+| `_pi/add_directory` | `{ sessionId, path }`                                                               | `{ additionalDirectories: string[] }` — append one absolute root (max 16) and persist it                                        |
 | `session/set_model` | `{ sessionId, modelId }`                                                            | `{}` — legacy alias for the `model` config option                                                                               |
 | `_pi/emit_event`    | `{ sessionId, channel, data? }`                                                     | `{}` — publishes on the session's extension event bus (the reverse of `extension_event`; the injected event is not echoed back) |
 
