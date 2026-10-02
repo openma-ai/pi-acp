@@ -674,12 +674,12 @@ export class PiAcpAgent implements AcpAgent {
       case CONFIG_MODEL: {
         if (typeof value !== "string") throw invalidParams("model must be a string");
         if (session.isRunning) throw invalidParams("cannot switch models while a turn is running");
-        await session.setModel(value);
+        await session.setModel(value, { persist: wantsPersist(params._meta) });
         break;
       }
       case CONFIG_THINKING: {
         if (typeof value !== "string") throw invalidParams("thinking level must be a string");
-        session.setThinking(value);
+        session.setThinking(value, { persist: wantsPersist(params._meta) });
         break;
       }
       case CONFIG_AUTO_COMPACTION: {
@@ -711,7 +711,7 @@ export class PiAcpAgent implements AcpAgent {
       throw invalidParams(`${LEGACY_SET_MODEL_METHOD} requires sessionId and modelId`);
     const session = await this.requireOrRestore(sessionId);
     if (session.isRunning) throw invalidParams("cannot switch models while a turn is running");
-    await session.setModel(modelId);
+    await session.setModel(modelId, { persist: wantsPersist(params["_meta"]) });
     session.publishConfigOptions();
     return {};
   }
@@ -731,7 +731,8 @@ export class PiAcpAgent implements AcpAgent {
       if (error instanceof UnsupportedPromptContentError) throw invalidParams(error.message);
       throw error;
     }
-    void readPiMeta(params["_meta"]);
+    // Backchat sends `_meta.steering.idleBehavior: "promptRequired"`. Idle never
+    // starts a turn; the client follows up with `session/prompt` after this one ends.
     if (!session.isRunning) return { outcome: "promptRequired", reason: "noRunningTurn" };
     try {
       await session.steer(converted.text, converted.images);
@@ -784,6 +785,11 @@ export class PiAcpAgent implements AcpAgent {
     session.publishCommands();
     return { trusted: true };
   }
+}
+
+/** `_meta.pi.persist: true` saves the choice as pi's global default. Otherwise session-only. */
+function wantsPersist(meta: unknown): boolean {
+  return readPiMeta(meta)?.["persist"] === true;
 }
 
 function validateCwd(cwd: string): void {
