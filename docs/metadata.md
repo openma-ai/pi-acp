@@ -97,12 +97,26 @@ logged or persisted as transcript content.
 `custom_entry`. Event-bus traffic (`extension_event`) has no sender identity in
 pi; correlate by channel namespace.
 
-`additionalDirectories` echoes the workspace roots tracked by the
-[pi-add-dir](https://pi.dev/packages/pi-add-dir) extension for this session.
-pi has no multi-root primitive; the adapter bundles pi-add-dir and loads it into
-every session (unless the user's pi settings already install it), and ACP
-`additionalDirectories` are applied by running its `/add-dir <path>` command.
-Rejected entries appear in `diagnostics`.
+`additionalDirectories` echoes the canonical extra roots in filesystem scope for
+this session (not including `cwd`). The same active list is the standard
+`session/list` `SessionInfo.additionalDirectories` field. `cwd` remains the only
+project root for skills and AGENTS.md.
+
+The path boundary is opt-in. It applies to `read`, `write`, `edit`, `grep`,
+`find`, `ls`, and `bash` only when the client sent `additionalDirectories`
+(including `[]`) or set `_meta.pi.restoreAdditionalDirectories` to `true`.
+Omitting the field leaves tool access as it was before this capability: paths
+outside `cwd` are not rejected. `additionalDirectoriesEnforced` is `true` when
+the boundary is on.
+
+`session/load`, `session/resume`, and `session/fork` follow the stable ACP rule:
+omitting `additionalDirectories` activates no additional roots and does not
+inherit a previously stored list. An empty array is an explicit cwd-only
+boundary. A non-empty array replaces the list and turns the boundary on.
+`_meta.pi.restoreAdditionalDirectories: true`, sent without the field, restores
+the last explicit list and turns the boundary on. Filesystem roots, `$HOME`,
+and malformed entries reject the request. `session/list` reports only the
+active list, so it is `[]` after an omit.
 
 `diagnostics` lists non-fatal startup problems (extension load errors, untrusted
 project resources, unavailable MCP servers).
@@ -218,17 +232,10 @@ Forms generated for pi extension dialogs include the original request:
 `ui` is `select`, `confirm`, `input`, or `editor`. The standard form schema is
 complete on its own.
 
-## Known third-party extensions
+## Extensions
 
-pi lacks a multi-root primitive. Rather than inventing one, the adapter bundles
-the extension that provides it
-(by package identity in settings and in the loaded-extension inventory) and
-maps that extension's own wire shapes onto ACP. Absent the extension, the ACP
-feature is absent.
-
-| Extension                                          | ACP surface                                                                                                                                                                                                                                                                                          |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`pi-add-dir`](https://pi.dev/packages/pi-add-dir) | Bundled dependency, loaded into every session unless already installed by pi. `sessionCapabilities.additionalDirectories`; requested roots run `/add-dir <path>`; state read from its `add-dir:state` entry; `/add-dir`, `/remove-dir`, `/dirs` and the `add_directory` tool are available as usual. |
+User-installed extensions are forwarded as-is. They do not implement ACP
+`additionalDirectories`; that scope is enforced by the adapter.
 
 ## Extension methods
 
@@ -236,6 +243,7 @@ feature is absent.
 | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `_session/steering` | `{ sessionId, prompt, _meta?: { steering?: { idleBehavior?: "promptRequired" } } }` | `{ outcome: "injected" }` or `{ outcome: "promptRequired", reason: "noRunningTurn" }`                                           |
 | `_pi/trust_project` | `{ sessionId, remember?: boolean }`                                                 | `{ trusted: true }` — loads the project's `.pi/` resources                                                                      |
+| `_pi/add_directory` | `{ sessionId, path }`                                                               | `{ additionalDirectories: string[] }` — append one absolute root (max 16), turn the boundary on, and persist it                 |
 | `session/set_model` | `{ sessionId, modelId }`                                                            | `{}` — legacy alias for the `model` config option                                                                               |
 | `_pi/emit_event`    | `{ sessionId, channel, data? }`                                                     | `{}` — publishes on the session's extension event bus (the reverse of `extension_event`; the injected event is not echoed back) |
 

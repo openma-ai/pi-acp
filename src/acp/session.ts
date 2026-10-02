@@ -50,12 +50,18 @@ import {
   type TerminalOutputMode,
 } from "./translate.ts";
 import { createAcpUiContext } from "./ui-context.ts";
-import { detectFromInventory, detectFromSettings, type KnownExtensionId } from "./extensions/registry.ts";
 import {
-  applyAdditionalDirectories,
-  bundledPiAddDirPath,
-  readAddedDirectories,
-} from "./extensions/pi-add-dir.ts";
+  ADDITIONAL_DIRECTORIES_ENTRY,
+  AdditionalDirectoriesError,
+  additionalDirectoriesSupported,
+  persistedAdditionalDirectoriesRecord,
+  savedAdditionalDirectories,
+  scopeExtensionLoaded,
+  validateAdditionalDirectories,
+  workspaceScopeExtension,
+  WorkspaceScope,
+  type DirectoryPlan,
+} from "./workspace-scope.ts";
 
 export interface ClientFeatures {
   /** Display-terminal `_meta` extension the client renders (`_meta.terminal_output[_delta]`). */
@@ -76,8 +82,11 @@ export interface SessionOpenOptions {
   modelRuntime: ModelRuntime;
   features: ClientFeatures;
   mcpServers: readonly McpServer[] | undefined;
-  /** ACP `additionalDirectories`: extra workspace roots surfaced to the model. */
-  additionalDirectories?: readonly string[];
+  /**
+   * How ACP `additionalDirectories` apply. `cwd` stays the project root for
+   * skills and AGENTS.md; these roots only widen filesystem scope.
+   */
+  directoryPlan: DirectoryPlan;
   /** Existing pi session file to open (load/resume) or fork from. */
   sessionFile?: string;
   fork?: boolean;
@@ -128,8 +137,9 @@ export class PiAcpSession {
   private readonly features: ClientFeatures;
   private resourceDiagnostics: string[] = [];
   private eventBus: TappedEventBus | undefined;
-  private known = new Set<KnownExtensionId>();
-  private requestedDirectories: readonly string[] | undefined;
+  private readonly scope: WorkspaceScope;
+  private readonly directoryPlan: DirectoryPlan;
+  private scopeReady = false;
   private unsubscribe: (() => void) | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
@@ -147,6 +157,8 @@ export class PiAcpSession {
     this.conn = options.conn;
     this.settings = options.settings;
     this.features = options.features;
+    this.scope = new WorkspaceScope(options.cwd);
+    this.directoryPlan = options.directoryPlan;
     this.projection = new SessionProjection({
       cwd: options.cwd,
       // A delegated client terminal owns the presentation; the display-terminal
@@ -172,14 +184,43 @@ export class PiAcpSession {
     return [...this.startupDiagnostics, ...this.resourceDiagnostics];
   }
 
-  /** Known third-party extensions loaded in this session (see extensions/registry.ts). */
-  get knownExtensions(): ReadonlySet<KnownExtensionId> {
-    return this.known;
+  /** Canonical additional roots currently in filesystem scope (not including `cwd`). */
+  get additionalDirectories(): string[] {
+    return this.scope.enforced ? this.scope.additionalDirectories : [];
   }
 
-  /** Directories tracked by pi-add-dir for this session (empty when it is not installed). */
-  get additionalDirectories(): string[] {
-    return this.known.has("pi-add-dir") ? readAddedDirectories(this.session) : [];
+  /** True only when this session opted into the path boundary. */
+  get additionalDirectoriesEnforced(): boolean {
+    return this.scope.enforced;
+  }
+
+  /** Why a shell command is outside the session roots, if the boundary is on. */
+  shellDenial(command: string): string | undefined {
+    return this.scope.shellDenial(command);
+  }
+
+  /**
+   * Grow the persisted root list (`_pi/add_directory`) and turn the boundary on.
+   * Same policy as a lifecycle request: absolute, not a filesystem root, not `$HOME`, at most 16.
+   */
+  addAdditionalDirectory(filePath: string): string[] {
+    if (!additionalDirectoriesSupported()) throw invalidParams("additionalDirectories are not available");
+    if (!this.scopeReady) throw invalidParams("workspace scope is not loaded");
+    let next: string[];
+    try {
+      next = validateAdditionalDirectories(
+        [...(this.scope.enforced ? this.scope.additionalDirectories : []), filePath],
+        this.cwd,
+      );
+    } catch (error: unknown) {
+      if (error instanceof AdditionalDirectoriesError) throw invalidParams(error.message);
+      throw error;
+    }
+    const changed = !this.scope.enforced || !sameDirectories(next, this.scope.additionalDirectories);
+    this.scope.enforced = true;
+    this.scope.setAdditional(next);
+    if (changed) this.persistDirectoryRecord(next, true);
+    return this.additionalDirectories;
   }
 
   static async open(options: SessionOpenOptions): Promise<PiAcpSession> {
@@ -219,15 +260,9 @@ export class PiAcpSession {
     this.mcpMounts = mcp.mounts;
     this.resourceDiagnostics.push(...mcp.diagnostics);
 
-    this.requestedDirectories = options.additionalDirectories;
-
     // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.
     this.eventBus = createTappedEventBus((channel, data) => this.onExtensionEvent(channel, data));
-    // Bundled pi-add-dir backs ACP additionalDirectories; skipped when the user's pi already installs it.
-    const userInstallsAddDir = detectFromSettings(this.cwd, agentDir).has("pi-add-dir");
-    const bundled = userInstallsAddDir ? undefined : bundledPiAddDirPath();
-    if (bundled === undefined && !userInstallsAddDir)
-      logWarn("bundled pi-add-dir is missing; additionalDirectories will be unavailable");
+    const scopeEnabled = additionalDirectoriesSupported();
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       cwd,
@@ -245,7 +280,7 @@ export class PiAcpSession {
         modelRuntimeSignal: AbortSignal.timeout(15_000),
         resourceLoaderOptions: {
           eventBus: this.eventBus,
-          ...(bundled !== undefined ? { additionalExtensionPaths: [bundled] } : {}),
+          ...(scopeEnabled ? { extensionFactories: [workspaceScopeExtension(this.scope)] } : {}),
         },
       });
       const customTools: ToolDefinition[] = [...mcp.tools];
@@ -319,22 +354,64 @@ export class PiAcpSession {
     if (this.runtime.modelFallbackMessage !== undefined)
       this.startupDiagnostics.push(this.runtime.modelFallbackMessage);
     await this.bindSession();
-    await this.applyRequestedDirectories();
+    this.installDirectories(scopeEnabled);
   }
 
-  /** ACP `additionalDirectories` → pi-add-dir (no-op when the extension is absent). */
-  private async applyRequestedDirectories(): Promise<void> {
-    const requested = this.requestedDirectories;
-    this.requestedDirectories = undefined;
-    if (requested === undefined || requested.length === 0) return;
-    if (!this.known.has("pi-add-dir")) {
-      this.resourceDiagnostics.push(
-        `warning: additionalDirectories ignored (${requested.join(", ")}): the pi-add-dir extension did not load`,
-      );
+  /**
+   * Apply the lifecycle plan. The boundary stays off unless the client sent
+   * `additionalDirectories` or `_meta.pi.restoreAdditionalDirectories`.
+   */
+  private installDirectories(scopeEnabled: boolean): void {
+    const plan = this.directoryPlan;
+    if (plan.warning !== undefined) {
+      logWarn(plan.warning);
+      this.resourceDiagnostics.push(`warning: ${plan.warning}`);
+    }
+    if (scopeEnabled) {
+      const loaded = this.session.resourceLoader
+        .getExtensions()
+        .extensions.map((extension) => extension.path);
+      this.scopeReady = scopeExtensionLoaded(loaded);
+    }
+    if (!scopeEnabled || plan.kind === "ignored" || plan.kind === "off") {
+      this.scope.enforced = false;
+      this.scope.setAdditional([]);
+      if (scopeEnabled && plan.kind === "off") this.deactivateSavedDirectories();
       return;
     }
-    const problems = await applyAdditionalDirectories(this.session, this.cwd, requested);
-    for (const problem of problems) this.resourceDiagnostics.push(`warning: ${problem}`);
+    if (!this.scopeReady) {
+      throw internalError("workspace scope failed to load; refusing to enforce a path boundary");
+    }
+    let directories = plan.directories;
+    if (plan.kind === "restore") {
+      const saved = savedAdditionalDirectories(this.session.sessionManager.getBranch());
+      try {
+        directories = validateAdditionalDirectories(saved, this.cwd);
+      } catch (error: unknown) {
+        if (error instanceof AdditionalDirectoriesError) throw invalidParams(error.message);
+        throw error;
+      }
+    }
+    this.scope.enforced = true;
+    this.scope.setAdditional(directories);
+    this.persistDirectoryRecord(directories, true);
+  }
+
+  /** Keep the saved list for a later restore, but stop reporting or enforcing it. */
+  private deactivateSavedDirectories(): void {
+    const branch = this.session.sessionManager.getBranch();
+    const record = persistedAdditionalDirectoriesRecord(branch);
+    if (!record.enforced) return;
+    this.persistDirectoryRecord(record.directories, false);
+  }
+
+  private persistDirectoryRecord(directories: readonly string[], enforced: boolean): void {
+    const record = persistedAdditionalDirectoriesRecord(this.session.sessionManager.getBranch());
+    if (record.enforced === enforced && sameDirectories(record.directories, directories)) return;
+    this.session.sessionManager.appendCustomEntry(ADDITIONAL_DIRECTORIES_ENTRY, {
+      directories: [...directories],
+      enforced,
+    });
   }
 
   private resolveProjectTrust(cwd: string, agentDir: string): boolean {
@@ -420,7 +497,6 @@ export class PiAcpSession {
     });
     this.projection.setContextWindow(session.model?.contextWindow);
     this.projection.setToolOwner(toolOwnerLookup(session));
-    this.known = detectFromInventory(extensionInventory(session));
     this.unsubscribe = session.subscribe((event) => this.onSessionEvent(event));
   }
 
@@ -676,4 +752,8 @@ export class PiAcpSession {
     const mounts = this.mcpMounts.splice(0);
     await Promise.allSettled(mounts.map((mount) => mount.close()));
   }
+}
+
+function sameDirectories(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((dir, index) => dir === right[index]);
 }

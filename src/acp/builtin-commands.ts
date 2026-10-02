@@ -40,6 +40,14 @@ export async function runBuiltinCommand(
         ["Thinking", pi.thinkingLevel],
         ["Auto-compaction", pi.autoCompactionEnabled ? "on" : "off"],
         ["Workspace", session.cwd],
+        [
+          "Workspace scope",
+          session.additionalDirectoriesEnforced
+            ? session.additionalDirectories.length > 0
+              ? session.additionalDirectories.join(", ")
+              : "cwd only"
+            : "unbounded",
+        ],
         ["Session", `${pi.sessionId}${pi.sessionFile !== undefined ? ` — ${pi.sessionFile}` : ""}`],
         [
           "Messages",
@@ -209,6 +217,8 @@ export async function runBuiltinCommand(
     }
     case "bash": {
       if (args.length === 0) return { text: "usage: /bash <command>" };
+      const denial = session.shellDenial(args);
+      if (denial !== undefined) return { text: denial };
       const toolCallId = `user-bash-${Date.now().toString(36)}`;
       session.emit({
         sessionUpdate: "tool_call",
