@@ -25,3 +25,23 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node dist/bin.js --version
+
+  # Version bumps must name every PR merged since the previous tag, keep the
+  # lockfile in sync, and stay on patch unless labeled release:minor / release:major.
+  # Other PRs only get a notice listing unreleased PRs on the base branch.
+  release-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch base branch and tags
+        run: git fetch origin "${{ github.base_ref }}" --tags --force
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check release metadata
+        run: bash scripts/release-check
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
