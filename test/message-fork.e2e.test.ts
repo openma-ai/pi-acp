@@ -85,7 +85,53 @@ function forkMeta(
   };
 }
 
+function textDeltas(updates: Update[]): { messageId: string; text: string }[] {
+  const deltas: { messageId: string; text: string }[] = [];
+  for (const update of updates) {
+    if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") continue;
+    if (update.content.text.length === 0 || typeof update.messageId !== "string") continue;
+    deltas.push({ messageId: update.messageId, text: update.content.text });
+  }
+  return deltas;
+}
+
 describe("inclusive session/fork", () => {
+  it("streams several text deltas before the turn ends, and load keeps that id", async () => {
+    const full = "abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+    harness = await Harness.create({ tokensPerSecond: 40 });
+    await harness.initialize();
+    const sessionId = await harness.newSession();
+    harness.respond(fauxAssistantMessage(full));
+    let settled = false;
+    const pending = harness.client
+      .prompt({ sessionId, prompt: [{ type: "text", text: "stream" }] })
+      .finally(() => {
+        settled = true;
+      });
+    const started = Date.now();
+    while (textDeltas(harness.updatesFor(sessionId)).length < 1) {
+      if (Date.now() - started > 5_000) throw new Error("timed out waiting for the first text delta");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const first = textDeltas(harness.updatesFor(sessionId));
+    expect(settled).toBe(false);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.text.length).toBeGreaterThan(0);
+    expect(first[0]!.text).not.toBe(full);
+    await pending;
+    const done = textDeltas(harness.updatesFor(sessionId));
+    expect(done.length).toBeGreaterThan(1);
+    expect(done.every((delta) => delta.messageId === first[0]!.messageId)).toBe(true);
+    expect(done.map((delta) => delta.text).join("")).toBe(full);
+
+    harness.notifications.length = 0;
+    await harness.client.loadSession({ sessionId, cwd: harness.workspace, mcpServers: [] });
+    await harness.settle();
+    expect(assistantMessages(harness.updatesFor(sessionId))).toEqual([
+      { messageId: first[0]!.messageId, text: full },
+    ]);
+  });
+
   it("forks at a message, keeps stable ids, and rejects a miss", async () => {
     harness = await Harness.create();
     const init = await harness.initialize();

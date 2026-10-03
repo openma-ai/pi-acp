@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-- Assistant `messageId`s are the pi session entry id. Live updates and
-  `session/load` replay use that id, and it stays the same across process
-  restarts. Counter ids (`m<n>` live, `h<n>` on replay) are no longer emitted.
+- Assistant `messageId`s stream with each token. The id is
+  `<parentEntryId>:<ordinal>`: the entry already persisted when the assistant
+  message starts, plus the 1-based file order of this assistant among that
+  parent's assistant children. `session/load` recomputes it, including after a
+  process restart. Counter ids (`m<n>` live, `h<n>` on replay) are no longer
+  emitted. `session/fork` maps this id back to the pi entry.
 - `session/fork` accepts inclusive `_meta.jetbrains.air.fork` v1 and keeps the
   source history through the selected assistant message. `initialize` advertises
   `agentCapabilities._meta.jetbrains.air.fork` as `{ "version": 1, "inclusive": true }`

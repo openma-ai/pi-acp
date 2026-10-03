@@ -42,11 +42,12 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
 
 ## Features
 
-- **Streaming** — `agent_message_chunk` / `agent_thought_chunk` share the pi session
-  entry id as `messageId`. Live updates and `session/load` replay use that same id,
-  including after a process restart. Chunks for one message are emitted once the
-  entry is persisted, before the next tool runs. A metadata-only boundary closes
-  each assistant message.
+- **Streaming** — `agent_message_chunk` / `agent_thought_chunk` stream token by token.
+  They share a stable `messageId`: `<parentEntryId>:<ordinal>`, taken from the entry
+  already on disk when the assistant message starts (the user message, or the previous
+  tool result) and the 1-based file order of this assistant among that parent's
+  assistant children. `session/load` recomputes the same id, including after a process
+  restart. A metadata-only boundary closes each assistant message.
 - **Tool calls** — ACP kinds, human titles, absolute file locations (edit line inferred),
   structured `diff` content for `edit`/`write`, image results, shell output fenced or on a
   **display terminal** when the client supports one (`_meta.terminal_output`).

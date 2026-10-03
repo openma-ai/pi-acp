@@ -32,27 +32,37 @@ function projection(files: Record<string, string> = {}): SessionProjection {
 }
 
 describe("SessionProjection streaming", () => {
-  it("holds assistant chunks until they can use the pi entry id", () => {
+  it("streams each text delta immediately under one stable message id", () => {
     const p = projection();
+    p.noteAssistantMessageId("user-1:1");
     expect(p.onEvent({ type: "message_start", message: assistant() } as AgentSessionEvent)).toEqual([]);
     const partial = assistant();
     expect(
       p.onEvent({
         type: "message_update",
         message: partial,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hi", partial },
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hel", partial },
       } as AgentSessionEvent),
-    ).toEqual([]);
+    ).toEqual([
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hel" }, messageId: "user-1:1" },
+    ]);
+    expect(
+      p.onEvent({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "lo", partial },
+      } as AgentSessionEvent),
+    ).toEqual([
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" }, messageId: "user-1:1" },
+    ]);
     expect(
       p.onEvent({
         type: "message_update",
         message: partial,
         assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm", partial },
       } as AgentSessionEvent),
-    ).toEqual([]);
-    expect(p.bindAssistantEntry("entry-1")).toEqual([
-      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" }, messageId: "entry-1" },
-      { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" }, messageId: "entry-1" },
+    ).toEqual([
+      { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" }, messageId: "user-1:1" },
     ]);
   });
 

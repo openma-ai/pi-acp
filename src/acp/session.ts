@@ -41,6 +41,7 @@ import { authRequired, classifyFailure, internalError, invalidParams, looksLikeA
 import { createTappedEventBus, describeExtensionEvent, type TappedEventBus } from "./extension-events.ts";
 import { extensionInventory, toolOwnerLookup, type ExtensionInventoryEntry } from "./extension-inventory.ts";
 import { buildReplay } from "./history.ts";
+import { nextAssistantMessageId } from "./message-id.ts";
 import { piMeta } from "./meta.ts";
 import { mountMcpServers, type McpMount } from "./mcp.ts";
 import {
@@ -141,8 +142,6 @@ export class PiAcpSession {
   private readonly directoryPlan: DirectoryPlan;
   private scopeReady = false;
   private unsubscribe: (() => void) | undefined;
-  /** Session manager whose `appendMessage` stamps live assistant message ids. */
-  private messageIdHooked: SessionManager | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
   private readonly trustedProjects = new Set<string>();
@@ -445,7 +444,6 @@ export class PiAcpSession {
 
   private async bindSession(): Promise<void> {
     this.unsubscribe?.();
-    this.installMessageIdHook();
     const session = this.runtime.session;
     const theme = session.resourceLoader.getThemes().themes[0] ?? stubTheme();
     await session.bindExtensions({
@@ -508,26 +506,13 @@ export class PiAcpSession {
     return extensionInventory(this.session);
   }
 
-  /**
-   * Pi assigns the entry id inside `appendMessage`, after `message_end` listeners
-   * return. Wrap that call so live chunks, held until then, leave with the same
-   * id `session/load` reads back from the entry.
-   */
-  private installMessageIdHook(): void {
-    const manager = this.session.sessionManager;
-    if (this.messageIdHooked === manager) return;
-    this.messageIdHooked = manager;
-    const original = manager.appendMessage.bind(manager);
-    manager.appendMessage = (message) => {
-      const id = original(message);
-      if (message.role === "assistant") {
-        for (const update of this.projection.bindAssistantEntry(id)) this.emit(update);
-      }
-      return id;
-    };
-  }
-
   private onSessionEvent(event: AgentSessionEvent): void {
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      const manager = this.session.sessionManager;
+      this.projection.noteAssistantMessageId(
+        nextAssistantMessageId(manager.getLeafId(), manager.getEntries()),
+      );
+    }
     for (const update of this.projection.onEvent(event)) this.emit(update);
     if (event.type === "agent_settled") this.settle();
   }
@@ -596,7 +581,8 @@ export class PiAcpSession {
   }
 
   replayHistory(): void {
-    const replay = buildReplay(this.session.sessionManager.buildContextEntries(), this.cwd);
+    const manager = this.session.sessionManager;
+    const replay = buildReplay(manager.buildContextEntries(), this.cwd, manager.getEntries());
     for (const update of replay.updates) this.emit(update);
     if (replay.usage !== undefined) {
       this.emit({

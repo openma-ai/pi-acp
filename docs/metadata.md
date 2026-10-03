@@ -190,21 +190,26 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
 {
   "sessionUpdate": "agent_message_chunk",
   "content": { "type": "text", "text": "" },
-  "messageId": "a1b2c3d4",
+  "messageId": "8f3a1c2b:1",
   "_meta": {
     "pi": { "event": "assistant_message", "stopReason": "stop", "model": "anthropic/claude-opus-4-5" }
   }
 }
 ```
 
-`messageId` is the pi session entry id of that assistant message. Every chunk
-of the message uses it, live and in `session/load` replay, and it does not
-change when the agent process restarts. Live chunks are released once pi has
-persisted the entry, which is when the id exists, and before the next tool
-runs. Older counter ids (`m<n>` live, `h<n>` on replay) are not emitted;
-`session/fork` still accepts them when `messageFingerprint` identifies the
-message. History replay only emits the boundary for `error`/`aborted`
-messages, adding `error` when pi recorded one.
+`messageId` is stable for every chunk of one assistant message, live and in
+`session/load` replay, and it does not change when the agent process restarts.
+Pi only assigns the assistant entry id when the message is appended, after
+streaming, so the id is derived from state that already exists when the first
+token is produced: `<parentEntryId>:<ordinal>`. `parentEntryId` is the current
+leaf (the user message that triggered the turn, or the previous tool result).
+`ordinal` is the 1-based file order of this assistant among assistant children
+of that parent. A message with no parent uses `root`. Replay walks the full
+entry tree and applies the same rule. `session/fork` accepts this id (and a
+trailing `:segment:<n>`) and resolves it to the pi entry. Older counter ids
+(`m<n>` live, `h<n>` on replay) are not emitted; fork still accepts them when
+`messageFingerprint` identifies the message. History replay only emits the
+boundary for `error`/`aborted` messages, adding `error` when pi recorded one.
 
 ### Notices carried as `session_info_update`
 

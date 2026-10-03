@@ -24,6 +24,7 @@ import {
   sha256Fingerprint,
   type InclusiveForkRequest,
 } from "../src/acp/fork-point.ts";
+import { assistantAcpMessageId, nextAssistantMessageId } from "../src/acp/message-id.ts";
 import { SessionProjection } from "../src/acp/translate.ts";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
@@ -133,9 +134,13 @@ describe("locateForkAssistant", () => {
     entry("a3", "u3", assistant("THIRD"), "2026-01-01T00:00:06.000Z"),
   ];
 
-  it("matches an id, then a :segment: suffix", () => {
+  it("matches an entry id, a derived parent id, and a :segment: suffix", () => {
     expect(locateForkAssistant(entries, entries, request({ messageId: "a2" }))?.id).toBe("a2");
     expect(locateForkAssistant(entries, entries, request({ messageId: "a2:segment:4" }))?.id).toBe("a2");
+    expect(assistantAcpMessageId(entries[3] as never, entries)).toBe("u2:1");
+    expect(locateForkAssistant(entries, entries, request({ messageId: "u2:1" }))?.id).toBe("a2");
+    expect(locateForkAssistant(entries, entries, request({ messageId: "u2:1:segment:2" }))?.id).toBe("a2");
+    expect(nextAssistantMessageId("u2", entries.slice(0, 3))).toBe("u2:1");
   });
 
   it("uses a unique fingerprint, then occurrence when several match", () => {
@@ -226,39 +231,41 @@ describe("sha256Fingerprint", () => {
 });
 
 describe("stable message ids", () => {
-  it("stamps live chunks and replay with the same entry id", () => {
-    const id = "abc12345";
-    const replay = buildReplay([entry(id, null, assistant("hello"), "2026-01-01T00:00:01.000Z")], "/w");
+  it("streams live deltas and replay under the parent ordinal id", () => {
+    const user = entry(
+      "user-1",
+      null,
+      { role: "user", content: "q", timestamp: 0 },
+      "2026-01-01T00:00:01.000Z",
+    );
+    const assistantEntry = entry("asst-1", "user-1", assistant("hello"), "2026-01-01T00:00:02.000Z");
+    const replay = buildReplay([user, assistantEntry], "/w");
     const replayIds = replay.updates
       .map((update) => ("messageId" in update ? update.messageId : undefined))
       .filter((value) => value !== undefined);
     expect(replayIds.length).toBeGreaterThan(0);
-    expect(replayIds.every((value) => value === id)).toBe(true);
+    expect(replayIds.every((value) => value === "user-1:1")).toBe(true);
 
     const projection = new SessionProjection({ cwd: "/w" });
     const message = assistant("hello");
+    projection.noteAssistantMessageId(nextAssistantMessageId("user-1", [user]));
     expect(projection.onEvent({ type: "message_start", message } as AgentSessionEvent)).toEqual([]);
-    expect(
-      projection.onEvent({
-        type: "message_update",
-        message,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello", partial: message },
-      } as AgentSessionEvent),
-    ).toEqual([]);
-    expect(projection.onEvent({ type: "message_end", message } as AgentSessionEvent)).toEqual([]);
-    const live = projection.bindAssistantEntry(id);
-    const liveIds = live
-      .map((update) => ("messageId" in update ? update.messageId : undefined))
-      .filter((value) => value !== undefined);
-    expect(liveIds.every((value) => value === id)).toBe(true);
-    expect(
-      live.some(
-        (update) =>
-          update.sessionUpdate === "agent_message_chunk" &&
-          update.content.type === "text" &&
-          update.content.text === "hello",
-      ),
-    ).toBe(true);
+    const first = projection.onEvent({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hel", partial: message },
+    } as AgentSessionEvent);
+    const second = projection.onEvent({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "lo", partial: message },
+    } as AgentSessionEvent);
+    expect(first).toEqual([
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hel" }, messageId: "user-1:1" },
+    ]);
+    expect(second).toEqual([
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" }, messageId: "user-1:1" },
+    ]);
   });
 });
 

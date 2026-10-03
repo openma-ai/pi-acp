@@ -58,6 +58,7 @@ function spawnAgent(agentDir: string, sessionDir: string, replies: string): Chil
         PI_ACP_TEST_AGENT_DIR: agentDir,
         PI_ACP_TEST_SESSION_DIR: sessionDir,
         PI_ACP_REPLIES: replies,
+        PI_ACP_TOKENS_PER_SECOND: "40",
       },
     },
   );
@@ -105,7 +106,8 @@ it("restarts the process and forks with an old counter id plus fingerprint", asy
   mkdirSync(sessionDir);
   mkdirSync(workspace);
   const replies = join(root, "replies.json");
-  writeFileSync(replies, JSON.stringify(["SAME", "SAME", "THIRD"]));
+  const streamed = "abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+  writeFileSync(replies, JSON.stringify([streamed, "SAME", "SAME", "THIRD"]));
 
   const updates: SessionNotification[] = [];
   child = spawnAgent(agentDir, sessionDir, replies);
@@ -132,14 +134,43 @@ it("restarts the process and forks with an old counter id plus fingerprint", asy
   });
   const created = await client.newSession({ cwd: workspace, mcpServers: [] });
   const sessionId = created.sessionId;
+  const deltas = () =>
+    updates
+      .filter((notice) => notice.sessionId === sessionId)
+      .map((notice) => notice.update)
+      .flatMap((update) => {
+        if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") return [];
+        if (update.content.text.length === 0 || typeof update.messageId !== "string") return [];
+        return [{ messageId: update.messageId, text: update.content.text }];
+      });
+  let streamSettled = false;
+  const streaming = client
+    .prompt({ sessionId, prompt: [{ type: "text", text: "stream-please" }] })
+    .finally(() => {
+      streamSettled = true;
+    });
+  const started = Date.now();
+  while (deltas().length < 1) {
+    if (Date.now() - started > 5_000) throw new Error("timed out waiting for the first text delta");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(streamSettled).toBe(false);
+  expect(deltas()).toHaveLength(1);
+  expect(deltas()[0]!.text.length).toBeLessThan(streamed.length);
+  await streaming;
+  const streamedDeltas = deltas();
+  expect(streamedDeltas.length).toBeGreaterThan(1);
+  expect(streamedDeltas.every((delta) => delta.messageId === streamedDeltas[0]!.messageId)).toBe(true);
+  expect(streamedDeltas.map((delta) => delta.text).join("")).toBe(streamed);
+
   await client.prompt({ sessionId, prompt: [{ type: "text", text: "round-one" }] });
   await client.prompt({ sessionId, prompt: [{ type: "text", text: "round-two" }] });
   await client.prompt({ sessionId, prompt: [{ type: "text", text: "round-three" }] });
   const live = assistantMessages(
     updates.filter((notice) => notice.sessionId === sessionId).map((notice) => notice.update),
   );
-  expect(live.map((message) => message.text)).toEqual(["SAME", "SAME", "THIRD"]);
-  const secondId = live[1]!.messageId;
+  expect(live.map((message) => message.text)).toEqual([streamed, "SAME", "SAME", "THIRD"]);
+  const secondId = live[2]!.messageId;
   await stopChild(child);
   child = undefined;
 
@@ -221,8 +252,8 @@ it("restarts the process and forks with an old counter id plus fingerprint", asy
   const forkReplay = assistantMessages(
     restarted.filter((notice) => notice.sessionId === forked.sessionId).map((notice) => notice.update),
   );
-  expect(forkReplay.map((message) => message.text)).toEqual(["SAME", "SAME"]);
-  expect(forkReplay[1]?.messageId).toBe(secondId);
+  expect(forkReplay.map((message) => message.text)).toEqual([streamed, "SAME", "SAME"]);
+  expect(forkReplay[2]?.messageId).toBe(secondId);
   const users = restarted
     .filter((notice) => notice.sessionId === forked.sessionId)
     .map((notice) => notice.update)
@@ -232,6 +263,7 @@ it("restarts the process and forks with an old counter id plus fingerprint", asy
         ? update.content.text
         : "",
     );
+  expect(users).toContain("stream-please");
   expect(users).toContain("round-one");
   expect(users).toContain("round-two");
   expect(users).not.toContain("round-three");

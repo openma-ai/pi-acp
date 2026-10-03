@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { SessionManager, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { assistantAcpMessageId } from "./message-id.ts";
 
 export const FORK_UNSUPPORTED_VERSION = "Unsupported jetbrains.air.fork version";
 export const FORK_MESSAGE_ID = "jetbrains.air.fork messageId must be a non-empty string";
@@ -157,9 +158,12 @@ function timeOrdered(entries: readonly SessionEntry[]): SessionMessageEntry[] {
 function matchMessageId(
   entries: readonly SessionMessageEntry[],
   request: InclusiveForkRequest,
+  idScope: readonly SessionEntry[],
 ): SessionMessageEntry | undefined {
   for (const candidate of messageIdCandidates(request.messageId)) {
-    const found = entries.find((entry) => entry.id === candidate);
+    const byEntryId = entries.find((entry) => entry.id === candidate);
+    // Live ids are `<parentEntryId>:<ordinal>`, not the assistant entry id.
+    const found = byEntryId ?? entries.find((entry) => assistantAcpMessageId(entry, idScope) === candidate);
     if (found === undefined) continue;
     // A hit whose text does not match the fingerprint is a stale id, not a match.
     if (request.messageFingerprint !== undefined && fingerprintOf(found) !== request.messageFingerprint)
@@ -183,10 +187,10 @@ export function locateForkAssistant(
   request: InclusiveForkRequest,
 ): SessionMessageEntry | undefined {
   const visibleAssistants = visible.filter(isForkableAssistant);
-  const visibleId = matchMessageId(visibleAssistants, request);
+  const visibleId = matchMessageId(visibleAssistants, request, allEntries);
   if (visibleId !== undefined) return visibleId;
   const tree = timeOrdered(allEntries);
-  const treeId = matchMessageId(tree, request);
+  const treeId = matchMessageId(tree, request, allEntries);
   if (treeId !== undefined) return treeId;
   if (request.messageFingerprint === undefined) return undefined;
 

@@ -9,6 +9,7 @@
 import type { ContentBlock, ToolCallContent, Usage } from "@agentclientprotocol/sdk";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import { assistantAcpMessageId } from "./message-id.ts";
 import { piMeta } from "./meta.ts";
 import { customEntryUpdates } from "./custom-entries.ts";
 import {
@@ -41,7 +42,12 @@ function userContentToBlocks(content: UserMessage["content"]): ContentBlock[] {
   return blocks;
 }
 
-export function buildReplay(entries: readonly SessionEntry[], cwd: string): ReplayResult {
+export function buildReplay(
+  entries: readonly SessionEntry[],
+  cwd: string,
+  /** Full entry tree used to recompute assistant message ids. Defaults to `entries`. */
+  idEntries: readonly SessionEntry[] = entries,
+): ReplayResult {
   const updates: SessionUpdate[] = [];
   let title: string | undefined;
   const usage = { input: 0, output: 0, cachedRead: 0, cachedWrite: 0, thought: 0, saw: false };
@@ -60,8 +66,7 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
           }
         } else if (message.role === "assistant") {
           const assistant = entry.message as AssistantMessage;
-          // Same id the live projection stamps once pi persists this entry.
-          const messageId = entry.id;
+          const messageId = assistantAcpMessageId(entry, idEntries);
           for (const block of assistant.content) {
             if (block.type === "thinking" && block.thinking.length > 0) {
               updates.push({

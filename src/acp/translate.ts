@@ -5,9 +5,9 @@
  * for structured diffs, per-prompt usage accumulation, last assistant outcome)
  * so the session class only wires transport and lifecycle.
  *
- * Assistant `messageId`s are pi session entry ids. Chunks are held until
- * `bindAssistantEntry` (the id does not exist until pi appends the message)
- * and then released with that id, which `session/load` replay uses too.
+ * Assistant chunks stream as pi emits them. The session assigns `messageId`
+ * before the first token (`noteAssistantMessageId`); replay derives the same
+ * id from the persisted parent entry.
  */
 
 import type {
@@ -98,13 +98,6 @@ interface PromptWindow {
   fileChanges: Map<string, FileChange>;
 }
 
-function stampMessageId(update: SessionUpdate, messageId: string): SessionUpdate {
-  if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
-    return { ...update, messageId };
-  }
-  return update;
-}
-
 function emptyWindow(): PromptWindow {
   return {
     usage: { input: 0, output: 0, cachedRead: 0, cachedWrite: 0, thought: 0 },
@@ -140,8 +133,8 @@ export class SessionProjection {
   private contextWindow: number | undefined;
   private messageSeq = 0;
   private currentMessageId: string | undefined;
-  /** Chunks for the assistant message that is waiting for its entry id. */
-  private held: SessionUpdate[] | undefined;
+  /** Set by the session before the assistant `message_start` it belongs to. */
+  private notedAssistantId: string | undefined;
 
   constructor(options: ProjectionOptions) {
     this.cwd = options.cwd;
@@ -217,36 +210,22 @@ export class SessionProjection {
     this.toolCalls.clear();
   }
 
-  onEvent(event: AgentSessionEvent): SessionUpdate[] {
-    if (event.type === "message_start" && event.message.role === "assistant") {
-      this.messageSeq += 1;
-      this.currentMessageId = undefined;
-      this.held = [];
-      return [];
-    }
-    const updates = this.dispatch(event);
-    if (this.held !== undefined) {
-      this.held.push(...updates);
-      return [];
-    }
-    return updates;
-  }
-
   /**
-   * Release chunks held since the assistant `message_start`, stamped with the
-   * persisted pi entry id. Live and replay ids are this string.
+   * Stable id for the next assistant message. The following `message_start`
+   * consumes it, and text deltas emitted after that carry it immediately.
    */
-  bindAssistantEntry(entryId: string): SessionUpdate[] {
-    this.currentMessageId = entryId;
-    const held = this.held;
-    this.held = undefined;
-    if (held === undefined || held.length === 0) return [];
-    return held.map((update) => stampMessageId(update, entryId));
+  noteAssistantMessageId(id: string): void {
+    this.notedAssistantId = id;
   }
 
-  private dispatch(event: AgentSessionEvent): SessionUpdate[] {
+  onEvent(event: AgentSessionEvent): SessionUpdate[] {
     switch (event.type) {
       case "message_start":
+        if (event.message.role === "assistant") {
+          this.messageSeq += 1;
+          this.currentMessageId = this.notedAssistantId;
+          this.notedAssistantId = undefined;
+        }
         return [];
       case "message_update":
         return this.onMessageUpdate(event.assistantMessageEvent);

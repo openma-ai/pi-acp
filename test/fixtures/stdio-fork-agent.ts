@@ -18,11 +18,13 @@ const agentDir = required("PI_ACP_TEST_AGENT_DIR");
 const sessionDir = required("PI_ACP_TEST_SESSION_DIR");
 const repliesPath = required("PI_ACP_REPLIES");
 
+const tokensPerSecond = Number(process.env.PI_ACP_TOKENS_PER_SECOND);
 const faux = fauxProvider({
   provider: "faux",
   models: [
     { id: "faux-1", name: "Faux One", reasoning: true, input: ["text", "image"], contextWindow: 100_000 },
   ],
+  ...(Number.isFinite(tokensPerSecond) && tokensPerSecond > 0 ? { tokensPerSecond } : {}),
 });
 
 let calls = 0;
