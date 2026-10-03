@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 — 2026-10-03
 
 - Assistant `messageId`s stream with each token. The id is
   `<parentEntryId>:<ordinal>`: the entry already persisted when the assistant
