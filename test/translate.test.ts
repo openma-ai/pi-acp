@@ -32,25 +32,37 @@ function projection(files: Record<string, string> = {}): SessionProjection {
 }
 
 describe("SessionProjection streaming", () => {
-  it("streams text and thinking deltas with a stable message id", () => {
+  it("streams each text delta immediately under one stable message id", () => {
     const p = projection();
-    p.onEvent({ type: "message_start", message: assistant() } as AgentSessionEvent);
+    p.noteAssistantMessageId("user-1:1");
+    expect(p.onEvent({ type: "message_start", message: assistant() } as AgentSessionEvent)).toEqual([]);
     const partial = assistant();
-    const text = p.onEvent({
-      type: "message_update",
-      message: partial,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hi", partial },
-    } as AgentSessionEvent);
-    const thought = p.onEvent({
-      type: "message_update",
-      message: partial,
-      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm", partial },
-    } as AgentSessionEvent);
-    expect(text).toEqual([
-      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" }, messageId: "m1" },
+    expect(
+      p.onEvent({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hel", partial },
+      } as AgentSessionEvent),
+    ).toEqual([
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hel" }, messageId: "user-1:1" },
     ]);
-    expect(thought).toEqual([
-      { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" }, messageId: "m1" },
+    expect(
+      p.onEvent({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "lo", partial },
+      } as AgentSessionEvent),
+    ).toEqual([
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" }, messageId: "user-1:1" },
+    ]);
+    expect(
+      p.onEvent({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm", partial },
+      } as AgentSessionEvent),
+    ).toEqual([
+      { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" }, messageId: "user-1:1" },
     ]);
   });
 

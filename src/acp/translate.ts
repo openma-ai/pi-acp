@@ -4,6 +4,10 @@
  * Owns the per-session streaming bookkeeping (open tool calls, file snapshots
  * for structured diffs, per-prompt usage accumulation, last assistant outcome)
  * so the session class only wires transport and lifecycle.
+ *
+ * Assistant chunks stream as pi emits them. The session assigns `messageId`
+ * before the first token (`noteAssistantMessageId`); replay derives the same
+ * id from the persisted parent entry.
  */
 
 import type {
@@ -129,6 +133,8 @@ export class SessionProjection {
   private contextWindow: number | undefined;
   private messageSeq = 0;
   private currentMessageId: string | undefined;
+  /** Set by the session before the assistant `message_start` it belongs to. */
+  private notedAssistantId: string | undefined;
 
   constructor(options: ProjectionOptions) {
     this.cwd = options.cwd;
@@ -204,12 +210,21 @@ export class SessionProjection {
     this.toolCalls.clear();
   }
 
+  /**
+   * Stable id for the next assistant message. The following `message_start`
+   * consumes it, and text deltas emitted after that carry it immediately.
+   */
+  noteAssistantMessageId(id: string): void {
+    this.notedAssistantId = id;
+  }
+
   onEvent(event: AgentSessionEvent): SessionUpdate[] {
     switch (event.type) {
       case "message_start":
         if (event.message.role === "assistant") {
           this.messageSeq += 1;
-          this.currentMessageId = `m${this.messageSeq}`;
+          this.currentMessageId = this.notedAssistantId;
+          this.notedAssistantId = undefined;
         }
         return [];
       case "message_update":

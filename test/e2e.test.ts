@@ -27,6 +27,11 @@ describe("initialize", () => {
       sessionCapabilities: { list: {}, delete: {}, fork: {}, resume: {}, close: {} },
       auth: { logout: {} },
     });
+    expect(response.agentCapabilities?._meta).toMatchObject({
+      authStatus: {},
+      pi: { delegation: expect.any(Object) },
+      jetbrains: { air: { fork: { version: 1, inclusive: true } } },
+    });
     expect(response._meta).toMatchObject({ steering: { supported: true } });
     const ids = (response.authMethods ?? []).map((m) => m.id);
     expect(ids).toContain("pi-terminal-login");

@@ -42,8 +42,12 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
 
 ## Features
 
-- **Streaming** — `agent_message_chunk` / `agent_thought_chunk` with stable message ids;
-  a metadata-only boundary closes each assistant message.
+- **Streaming** — `agent_message_chunk` / `agent_thought_chunk` stream token by token.
+  They share a stable `messageId`: `<parentEntryId>:<ordinal>`, taken from the entry
+  already on disk when the assistant message starts (the user message, or the previous
+  tool result) and the 1-based file order of this assistant among that parent's
+  assistant children. `session/load` recomputes the same id, including after a process
+  restart. A metadata-only boundary closes each assistant message.
 - **Tool calls** — ACP kinds, human titles, absolute file locations (edit line inferred),
   structured `diff` content for `edit`/`write`, image results, shell output fenced or on a
   **display terminal** when the client supports one (`_meta.terminal_output`).
@@ -63,7 +67,8 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   The active list comes back from `session/list`. `_pi/add_directory` grows a live session.
   Other extensions are forwarded as-is.
 - **Sessions** — `session/list` (pi's own store, filtered by cwd), `session/load` with full
-  history replay (compaction-aware branch), `session/resume` without replay, `session/fork`,
+  history replay (compaction-aware branch), `session/resume` without replay, `session/fork`
+  (whole session, or inclusive of one assistant message — see below),
   `session/close`, `session/delete`, session titles, and silent restore when a client prompts
   a session the agent process forgot.
 - **Slash commands** — adapter built-ins (`/status`, `/model`, `/thinking`, `/compact`,
@@ -102,6 +107,55 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
 - **Capability-aware** — boolean config options degrade to selects, display terminals follow
   `terminal_output` / `terminal_output_delta`, diffs carry `diffStats` and add/update kind, each
   turn ends with a file-change summary, and failed turns carry a typed failure kind.
+
+## Inclusive message fork
+
+`initialize` advertises `sessionCapabilities.fork` together with:
+
+```json
+"agentCapabilities": {
+  "_meta": { "jetbrains": { "air": { "fork": { "version": 1, "inclusive": true } } } }
+}
+```
+
+That object is deep-merged with the existing `pi` and `authStatus` keys. A
+`session/fork` without `_meta.jetbrains.air.fork` still copies the whole session.
+With version 1, the new session keeps the source history from the start through
+the chosen assistant message, including the user prompt that produced it and
+earlier tool calls and results. The source session is not modified, and the new
+session has a new id.
+
+```json
+{
+  "_meta": {
+    "jetbrains": {
+      "air": {
+        "fork": {
+          "version": 1,
+          "messageId": "<agent_message_chunk messageId>",
+          "messageFingerprint": "sha256:<64 lowercase hex>",
+          "messageOccurrence": 1
+        }
+      }
+    }
+  }
+}
+```
+
+`messageFingerprint` is SHA-256 of the UTF-8 text of that assistant message
+(text chunks only). `messageOccurrence` counts identical visible assistant texts
+starting at 1. A trailing `:segment:<n>` on the id is stripped when the full id
+does not match. If the id is stale or is an old counter id, the fingerprint
+selects the message; a message hidden by compaction is looked up in the full
+entry tree. Anything that does not match returns JSON-RPC `-32602`
+(`invalidParams`) and does not fall back to a whole-session fork.
+
+Tool calls that belong to the selected assistant message are removed, and their
+results (which are stored after that message) are not copied. The message's
+text and thinking stay. That keeps the model transcript legal — it does not end
+on tool calls with no results — and `session/load` replay of the new session
+ends on that assistant message. `session/prompt` in the new session continues
+from there. Only persisted, completed messages can be a fork point.
 
 ## MCP tools over ACP
 

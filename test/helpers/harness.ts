@@ -58,6 +58,8 @@ export interface HarnessOptions {
   writeTextFile?: Client["writeTextFile"];
   /** Extra native providers registered on the model runtime before connecting. */
   providers?: Provider[];
+  /** Faux token rate. Set it when a test must observe a chunk before the turn ends. */
+  tokensPerSecond?: number;
 }
 
 export class Harness {
@@ -101,6 +103,7 @@ export class Harness {
         { id: "faux-1", name: "Faux One", reasoning: true, input: ["text", "image"], contextWindow: 100_000 },
         { id: "faux-2", name: "Faux Two", reasoning: false, input: ["text"], contextWindow: 50_000 },
       ],
+      ...(options.tokensPerSecond !== undefined ? { tokensPerSecond: options.tokensPerSecond } : {}),
     });
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
