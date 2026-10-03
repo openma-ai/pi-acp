@@ -7,17 +7,17 @@
   message starts, plus the 1-based file order of this assistant among that
   parent's assistant children. `session/load` recomputes it, including after a
   process restart. Counter ids (`m<n>` live, `h<n>` on replay) are no longer
-  emitted. `session/fork` maps this id back to the pi entry.
+  emitted. `session/fork` maps this id back to the pi entry (#6).
 - `session/fork` accepts inclusive `_meta.jetbrains.air.fork` v1 and keeps the
   source history through the selected assistant message. `initialize` advertises
   `agentCapabilities._meta.jetbrains.air.fork` as `{ "version": 1, "inclusive": true }`
   beside `sessionCapabilities.fork`. A missing or invalid fork point returns
   JSON-RPC `-32602` instead of copying the whole session. Tool calls on the
   selected message are removed so the copied transcript does not end on an
-  unfinished tool turn.
+  unfinished tool turn (#6).
 - Model and thinking changes again persist as pi's global defaults
   (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), matching the pi TUI.
-  This restores the behavior kept when issue #3 was closed as not planned.
+  This restores the behavior kept when issue #3 was closed as not planned (#5).
 
 ## 0.1.5 — 2026-10-02
 
