@@ -141,6 +141,8 @@ export class PiAcpSession {
   private readonly directoryPlan: DirectoryPlan;
   private scopeReady = false;
   private unsubscribe: (() => void) | undefined;
+  /** Session manager whose `appendMessage` stamps live assistant message ids. */
+  private messageIdHooked: SessionManager | undefined;
   private inflight: Inflight | undefined;
   private cancelled = false;
   private readonly trustedProjects = new Set<string>();
@@ -443,6 +445,7 @@ export class PiAcpSession {
 
   private async bindSession(): Promise<void> {
     this.unsubscribe?.();
+    this.installMessageIdHook();
     const session = this.runtime.session;
     const theme = session.resourceLoader.getThemes().themes[0] ?? stubTheme();
     await session.bindExtensions({
@@ -503,6 +506,25 @@ export class PiAcpSession {
   /** Loaded extensions with the tools/commands/custom types they own. */
   extensions(): ExtensionInventoryEntry[] {
     return extensionInventory(this.session);
+  }
+
+  /**
+   * Pi assigns the entry id inside `appendMessage`, after `message_end` listeners
+   * return. Wrap that call so live chunks, held until then, leave with the same
+   * id `session/load` reads back from the entry.
+   */
+  private installMessageIdHook(): void {
+    const manager = this.session.sessionManager;
+    if (this.messageIdHooked === manager) return;
+    this.messageIdHooked = manager;
+    const original = manager.appendMessage.bind(manager);
+    manager.appendMessage = (message) => {
+      const id = original(message);
+      if (message.role === "assistant") {
+        for (const update of this.projection.bindAssistantEntry(id)) this.emit(update);
+      }
+      return id;
+    };
   }
 
   private onSessionEvent(event: AgentSessionEvent): void {

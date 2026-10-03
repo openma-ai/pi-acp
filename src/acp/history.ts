@@ -44,7 +44,6 @@ function userContentToBlocks(content: UserMessage["content"]): ContentBlock[] {
 export function buildReplay(entries: readonly SessionEntry[], cwd: string): ReplayResult {
   const updates: SessionUpdate[] = [];
   let title: string | undefined;
-  let messageSeq = 0;
   const usage = { input: 0, output: 0, cachedRead: 0, cachedWrite: 0, thought: 0, saw: false };
   const openToolCalls = new Map<string, { name: string; args: unknown }>();
 
@@ -61,8 +60,8 @@ export function buildReplay(entries: readonly SessionEntry[], cwd: string): Repl
           }
         } else if (message.role === "assistant") {
           const assistant = entry.message as AssistantMessage;
-          messageSeq += 1;
-          const messageId = `h${messageSeq}`;
+          // Same id the live projection stamps once pi persists this entry.
+          const messageId = entry.id;
           for (const block of assistant.content) {
             if (block.type === "thinking" && block.thinking.length > 0) {
               updates.push({

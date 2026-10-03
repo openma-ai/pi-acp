@@ -60,6 +60,8 @@ import {
 } from "./config-options.ts";
 import { delegationFromClient } from "./delegation.ts";
 import { authRequired, internalError, invalidParams } from "./errors.ts";
+import { acpInclusiveForkCapabilityMeta, mergeCapabilityMeta } from "./fork-capability.ts";
+import { forkInclusiveSession, forkPointNotFoundMessage, parseJetbrainsAirFork } from "./fork-point.ts";
 import { piMeta, readPiMeta } from "./meta.ts";
 import { convertPrompt, UnsupportedPromptContentError } from "./prompt.ts";
 import type { RequestIdTracker } from "./request-ids.ts";
@@ -342,11 +344,14 @@ export class PiAcpAgent implements AcpAgent {
           ...(additionalDirectoriesCapability() !== undefined ? { additionalDirectories: {} } : {}),
         },
         auth: { logout: {} },
-        _meta: {
-          ...piMeta({ version: VERSION, delegation: this.features.delegation }),
-          // Presence announces that this agent pushes `_auth/status_update`.
-          [AUTH_STATUS_META_KEY]: {},
-        },
+        _meta: mergeCapabilityMeta(
+          {
+            ...piMeta({ version: VERSION, delegation: this.features.delegation }),
+            // Presence announces that this agent pushes `_auth/status_update`.
+            [AUTH_STATUS_META_KEY]: {},
+          },
+          acpInclusiveForkCapabilityMeta(),
+        ),
       },
       authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()),
       _meta: { steering: { supported: true } },
@@ -543,14 +548,35 @@ export class PiAcpAgent implements AcpAgent {
   async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
     this.assertOpen();
     validateCwd(params.cwd);
+    const parsed = parseJetbrainsAirFork(params._meta);
+    if (parsed.status === "invalid") throw invalidParams(parsed.message);
     const live = this.sessions.get(params.sessionId);
     const sourceFile =
       live?.session.sessionFile ?? (await findSession(params.sessionId, this.sessionDir))?.path;
     if (sourceFile === undefined) throw invalidParams(`unknown session: ${params.sessionId}`);
+
+    let sessionFile = sourceFile;
+    let fork = true;
+    if (parsed.status === "present") {
+      let branched: string | undefined;
+      try {
+        branched = forkInclusiveSession(sourceFile, params.cwd, this.sessionDir, parsed.request);
+      } catch (error: unknown) {
+        throw internalError(`inclusive fork failed: ${errorMessage(error)}`);
+      }
+      if (branched === undefined) {
+        throw invalidParams(forkPointNotFoundMessage(parsed.request.messageId, params.sessionId), {
+          messageId: parsed.request.messageId,
+        });
+      }
+      sessionFile = branched;
+      fork = false;
+    }
+
     const session = await this.openSession({
       cwd: params.cwd,
-      sessionFile: sourceFile,
-      fork: true,
+      sessionFile,
+      fork,
       reason: "fork",
       mcpServers: params.mcpServers ?? undefined,
       directoryPlan: directoryPlanOf(params.additionalDirectories, params.cwd, params._meta),

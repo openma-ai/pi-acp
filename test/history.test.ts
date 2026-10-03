@@ -58,6 +58,8 @@ describe("buildReplay", () => {
       "tool_call",
       "tool_call_update",
     ]);
+    expect(replay.updates[1]).toMatchObject({ messageId: "2" });
+    expect(replay.updates[2]).toMatchObject({ messageId: "2" });
     expect(replay.updates[4]).toMatchObject({
       toolCallId: "c1",
       status: "completed",

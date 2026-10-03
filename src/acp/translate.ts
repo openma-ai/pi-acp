@@ -4,6 +4,10 @@
  * Owns the per-session streaming bookkeeping (open tool calls, file snapshots
  * for structured diffs, per-prompt usage accumulation, last assistant outcome)
  * so the session class only wires transport and lifecycle.
+ *
+ * Assistant `messageId`s are pi session entry ids. Chunks are held until
+ * `bindAssistantEntry` (the id does not exist until pi appends the message)
+ * and then released with that id, which `session/load` replay uses too.
  */
 
 import type {
@@ -94,6 +98,13 @@ interface PromptWindow {
   fileChanges: Map<string, FileChange>;
 }
 
+function stampMessageId(update: SessionUpdate, messageId: string): SessionUpdate {
+  if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
+    return { ...update, messageId };
+  }
+  return update;
+}
+
 function emptyWindow(): PromptWindow {
   return {
     usage: { input: 0, output: 0, cachedRead: 0, cachedWrite: 0, thought: 0 },
@@ -129,6 +140,8 @@ export class SessionProjection {
   private contextWindow: number | undefined;
   private messageSeq = 0;
   private currentMessageId: string | undefined;
+  /** Chunks for the assistant message that is waiting for its entry id. */
+  private held: SessionUpdate[] | undefined;
 
   constructor(options: ProjectionOptions) {
     this.cwd = options.cwd;
@@ -205,12 +218,35 @@ export class SessionProjection {
   }
 
   onEvent(event: AgentSessionEvent): SessionUpdate[] {
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      this.messageSeq += 1;
+      this.currentMessageId = undefined;
+      this.held = [];
+      return [];
+    }
+    const updates = this.dispatch(event);
+    if (this.held !== undefined) {
+      this.held.push(...updates);
+      return [];
+    }
+    return updates;
+  }
+
+  /**
+   * Release chunks held since the assistant `message_start`, stamped with the
+   * persisted pi entry id. Live and replay ids are this string.
+   */
+  bindAssistantEntry(entryId: string): SessionUpdate[] {
+    this.currentMessageId = entryId;
+    const held = this.held;
+    this.held = undefined;
+    if (held === undefined || held.length === 0) return [];
+    return held.map((update) => stampMessageId(update, entryId));
+  }
+
+  private dispatch(event: AgentSessionEvent): SessionUpdate[] {
     switch (event.type) {
       case "message_start":
-        if (event.message.role === "assistant") {
-          this.messageSeq += 1;
-          this.currentMessageId = `m${this.messageSeq}`;
-        }
         return [];
       case "message_update":
         return this.onMessageUpdate(event.assistantMessageEvent);

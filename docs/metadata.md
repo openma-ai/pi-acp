@@ -30,11 +30,14 @@ The initialize response carries:
 {
   "_meta": { "steering": { "supported": true } },
   "agentCapabilities": {
+    "sessionCapabilities": { "fork": {} },
     "_meta": {
       "pi": {
         "version": "0.1.0",
         "delegation": { "readTextFile": false, "writeTextFile": false, "terminal": false }
-      }
+      },
+      "authStatus": {},
+      "jetbrains": { "air": { "fork": { "version": 1, "inclusive": true } } }
     }
   }
 }
@@ -45,6 +48,62 @@ The initialize response carries:
 
 `agentCapabilities._meta.authStatus: {}` announces that the agent pushes the
 `_auth/status_update` notification (see below).
+
+`agentCapabilities._meta.jetbrains.air.fork` is `{ "version": 1, "inclusive": true }`.
+It is nested under `jetbrains.air`, the same path as the `session/fork` request
+meta, and is deep-merged with `pi` and `authStatus`. `version` is the request
+extension version. `inclusive: true` means a message fork keeps the selected
+assistant message. It is advertised only together with `sessionCapabilities.fork`.
+The constant is copied from openma-common (`ACP_INCLUSIVE_FORK_CAPABILITY`).
+
+### Inclusive `session/fork`
+
+`session/fork` with no `_meta.jetbrains.air.fork` copies the whole session.
+
+When that object is present it must be version 1. The new session keeps the
+source history from the start through the selected top-level assistant entry,
+inclusive. The source session is not modified. A malformed object, an unknown
+version, or a point that cannot be matched returns JSON-RPC `-32602` and does
+not copy the whole session.
+
+```json
+{
+  "_meta": {
+    "jetbrains": {
+      "air": {
+        "fork": {
+          "version": 1,
+          "messageId": "<assistant message id>",
+          "messageFingerprint": "sha256:<64 lowercase hex>",
+          "messageOccurrence": 1
+        }
+      }
+    }
+  }
+}
+```
+
+| Field                | Required | Rule                                                                                                                                                        |
+| -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`            | yes      | Must be `1`. Any other value is `-32602` with `Unsupported jetbrains.air.fork version`.                                                                     |
+| `messageId`          | yes      | Trimmed non-empty string. A trailing `:segment:<n>` also matches the id without that suffix.                                                                |
+| `messageFingerprint` | no       | `sha256:` plus 64 lowercase hex digits: SHA-256 of the assistant message's UTF-8 text. Thinking and tool output are not included.                           |
+| `messageOccurrence`  | no       | Positive safe integer, default `1`. 1-based index among visible assistant messages with that exact text. A single fingerprint match ignores the occurrence. |
+
+Matching looks at completed top-level assistant messages (not subagent session
+files). The id is resolved on the compaction-aware visible branch, then on the
+full entry tree. If the id hits a message whose fingerprint differs, that hit
+is ignored. Otherwise equal fingerprints on the visible branch are used; when
+the text is not visible, the full tree is searched so a compacted message can
+still be selected. No match is `-32602`:
+`Fork point message <messageId> was not found in session <sessionId>`, with
+`data.messageId` set.
+
+The cut stops on that assistant entry. Tool-call blocks on it are removed and
+later tool results are not copied, so the next prompt is not an unfinished tool
+turn. Text and thinking stay. `session/load` on the new session replays through
+that assistant message. A running source session contributes only entries
+already persisted.
 
 ## Authentication metadata
 
@@ -131,16 +190,21 @@ Every assistant message ends with a metadata-only empty `agent_message_chunk`:
 {
   "sessionUpdate": "agent_message_chunk",
   "content": { "type": "text", "text": "" },
-  "messageId": "m3",
+  "messageId": "a1b2c3d4",
   "_meta": {
     "pi": { "event": "assistant_message", "stopReason": "stop", "model": "anthropic/claude-opus-4-5" }
   }
 }
 ```
 
-`messageId` is stable for every chunk of one assistant message (`m<n>` live,
-`h<n>` in history replay). History replay only emits the boundary for
-`error`/`aborted` messages, adding `error` when pi recorded one.
+`messageId` is the pi session entry id of that assistant message. Every chunk
+of the message uses it, live and in `session/load` replay, and it does not
+change when the agent process restarts. Live chunks are released once pi has
+persisted the entry, which is when the id exists, and before the next tool
+runs. Older counter ids (`m<n>` live, `h<n>` on replay) are not emitted;
+`session/fork` still accepts them when `messageFingerprint` identifies the
+message. History replay only emits the boundary for `error`/`aborted`
+messages, adding `error` when pi recorded one.
 
 ### Notices carried as `session_info_update`
 

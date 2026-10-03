@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Assistant `messageId`s are the pi session entry id. Live updates and
+  `session/load` replay use that id, and it stays the same across process
+  restarts. Counter ids (`m<n>` live, `h<n>` on replay) are no longer emitted.
+- `session/fork` accepts inclusive `_meta.jetbrains.air.fork` v1 and keeps the
+  source history through the selected assistant message. `initialize` advertises
+  `agentCapabilities._meta.jetbrains.air.fork` as `{ "version": 1, "inclusive": true }`
+  beside `sessionCapabilities.fork`. A missing or invalid fork point returns
+  JSON-RPC `-32602` instead of copying the whole session. Tool calls on the
+  selected message are removed so the copied transcript does not end on an
+  unfinished tool turn.
 - Model and thinking changes again persist as pi's global defaults
   (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), matching the pi TUI.
   This restores the behavior kept when issue #3 was closed as not planned.
