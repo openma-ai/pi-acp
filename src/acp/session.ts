@@ -21,7 +21,6 @@ import {
   getAgentDir,
   hasTrustRequiringProjectResources,
   ProjectTrustStore,
-  resolveCliModel,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -43,7 +42,8 @@ import { extensionInventory, toolOwnerLookup, type ExtensionInventoryEntry } fro
 import { buildReplay } from "./history.ts";
 import { nextAssistantMessageId } from "./message-id.ts";
 import { piMeta } from "./meta.ts";
-import { mountMcpServers, type McpMount } from "./mcp.ts";
+import { piMcpExtensions, planAcpMcpServers } from "./mcp.ts";
+import { resolveAliasedCliModel } from "./model-aliases.ts";
 import {
   assistantStopReasonToAcp,
   SessionProjection,
@@ -151,7 +151,6 @@ export class PiAcpSession {
   private lastEmit: Promise<void> = Promise.resolve();
   private _sessionId = "";
   private startupDiagnostics: string[] = [];
-  private mcpMounts: McpMount[] = [];
 
   private constructor(options: SessionOpenOptions) {
     this.cwd = options.cwd;
@@ -233,7 +232,6 @@ export class PiAcpSession {
       session.closed = true;
       session.unsubscribe?.();
       await session.runtime?.dispose().catch(() => undefined);
-      await session.closeMcp();
       throw error;
     }
   }
@@ -257,9 +255,7 @@ export class PiAcpSession {
     }
     this._sessionId = sessionManager.getSessionId();
 
-    const mcp = await mountMcpServers(options.mcpServers, this.cwd);
-    this.mcpMounts = mcp.mounts;
-    this.resourceDiagnostics.push(...mcp.diagnostics);
+    const mcp = planAcpMcpServers(options.mcpServers);
 
     // Every `pi.events.emit` from any extension flows through here; see extension-events.ts.
     this.eventBus = createTappedEventBus((channel, data) => this.onExtensionEvent(channel, data));
@@ -281,10 +277,13 @@ export class PiAcpSession {
         modelRuntimeSignal: AbortSignal.timeout(15_000),
         resourceLoaderOptions: {
           eventBus: this.eventBus,
-          ...(scopeEnabled ? { extensionFactories: [workspaceScopeExtension(this.scope)] } : {}),
+          extensionFactories: [
+            ...(scopeEnabled ? [workspaceScopeExtension(this.scope)] : []),
+            ...(mcp.servers.length > 0 ? [...piMcpExtensions(dir), mcp.extension] : []),
+          ],
         },
       });
-      const customTools: ToolDefinition[] = [...mcp.tools];
+      const customTools: ToolDefinition[] = [];
       if (settings.delegation) {
         customTools.push(
           ...createDelegatedTools({
@@ -305,7 +304,7 @@ export class PiAcpSession {
       let model;
       let thinkingLevel: ThinkingLevel | undefined;
       if (settings.model !== undefined) {
-        const resolved = resolveCliModel({ cliModel: settings.model, modelRuntime });
+        const resolved = resolveAliasedCliModel({ cliModel: settings.model, modelRuntime });
         if (resolved.error !== undefined) throw new Error(resolved.error);
         if (resolved.warning !== undefined) logWarn(resolved.warning);
         model = resolved.model;
@@ -350,6 +349,8 @@ export class PiAcpSession {
           }
         : {}),
     });
+    // Factories run during runtime creation, including a failed `registerMcpServer`.
+    this.resourceDiagnostics.push(...mcp.diagnostics);
     this.runtime.setRebindSession(async () => this.bindSession());
     this.startupDiagnostics = this.runtime.diagnostics.map((d) => `${d.type}: ${d.message}`);
     if (this.runtime.modelFallbackMessage !== undefined)
@@ -651,8 +652,9 @@ export class PiAcpSession {
       const run = this.session.prompt(text, {
         images: images !== undefined && images.length > 0 ? images : undefined,
         source: "rpc",
-        preflightResult: (ok) => {
-          accepted = ok;
+        // Called only after pi accepts the prompt (`started`, `handled`, or `queued`).
+        preflightResult: () => {
+          accepted = true;
         },
       });
       run.then(
@@ -758,12 +760,6 @@ export class PiAcpSession {
     } catch (error: unknown) {
       logDebug(`runtime dispose failed: ${errorMessage(error)}`);
     }
-    await this.closeMcp();
-  }
-
-  private async closeMcp(): Promise<void> {
-    const mounts = this.mcpMounts.splice(0);
-    await Promise.allSettled(mounts.map((mount) => mount.close()));
   }
 }
 

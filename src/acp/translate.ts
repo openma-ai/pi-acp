@@ -77,6 +77,8 @@ interface OpenToolCall {
   shellOutputSent: string;
   displayTerminal: boolean;
   clientTerminalId?: string;
+  /** Set when another tool made this call (`ctx.executeTool`, including codemode). */
+  parentToolCallId?: string;
 }
 
 interface UsageTotals {
@@ -232,7 +234,7 @@ export class SessionProjection {
       case "message_end":
         return this.onMessageEnd(event.message);
       case "tool_execution_start":
-        return this.onToolStart(event.toolCallId, event.toolName, event.args);
+        return this.onToolStart(event.toolCallId, event.toolName, event.args, event.parentToolCallId);
       case "tool_execution_update":
         return this.onToolUpdate(event.toolCallId, event.partialResult);
       case "tool_execution_end":
@@ -469,9 +471,16 @@ export class SessionProjection {
   private toolCallCreated(id: string, state: OpenToolCall): SessionUpdate {
     const terminal = this.terminalContent(id, state);
     const owner = this.toolOwner(state.name);
+    const pi =
+      owner !== undefined || state.parentToolCallId !== undefined
+        ? piMeta({
+            ...(owner !== undefined ? { extension: owner } : {}),
+            ...(state.parentToolCallId !== undefined ? { parentToolCallId: state.parentToolCallId } : {}),
+          })
+        : undefined;
     const meta = {
       ...(terminal?._meta ?? {}),
-      ...(owner !== undefined ? piMeta({ extension: owner }) : {}),
+      ...(pi ?? {}),
     };
     return {
       sessionUpdate: "tool_call",
@@ -506,7 +515,7 @@ export class SessionProjection {
     return undefined;
   }
 
-  private onToolStart(id: string, name: string, args: unknown): SessionUpdate[] {
+  private onToolStart(id: string, name: string, args: unknown, parentToolCallId?: string): SessionUpdate[] {
     let line: number | undefined;
     let snapshot: OpenToolCall["snapshot"];
     if (isFileMutationTool(name) && this.files !== undefined) {
@@ -533,10 +542,12 @@ export class SessionProjection {
         snapshot,
         shellOutputSent: "",
         displayTerminal: false,
+        ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
       };
       this.toolCalls.set(id, state);
       return [this.toolCallCreated(id, state)];
     }
+    if (parentToolCallId !== undefined) existing.parentToolCallId = parentToolCallId;
     existing.status = "in_progress";
     existing.args = args;
     existing.facts = facts;

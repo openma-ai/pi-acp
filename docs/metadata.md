@@ -244,7 +244,11 @@ A retry start also emits a visible italic `agent_message_chunk` with
 
 `tool_call` (initial update) carries `_meta.pi.extension: <path>` when the tool
 was registered by a pi extension. Built-in tools and
-client-delegated tools carry no attribution.
+client-delegated tools carry no attribution. A call another tool made
+(`ctx.executeTool`, including codemode scripts that call an MCP tool) also
+carries `_meta.pi.parentToolCallId` with the caller's tool-call id. Deferred
+MCP tools show up as their own `tool_call` after `tool_search` loads them, with
+the same kind, title, raw input, and raw output as any other tool.
 
 ### Diff metadata
 

@@ -39,8 +39,11 @@ npm run format
 ```
 
 Do not invent protocol conventions or semantics Pi does not have. Standard ACP
-`mcpServers` connect through the official MCP client and map to Pi's native
-custom-tool API, scoped to the session. ACP `additionalDirectories` widen filesystem
+`mcpServers` are registered on the session with pi's MCP extension
+(`registerMcpServer`, exposure `deferred`) so `tool_search` loads them. Do not
+mount a second MCP client. Legacy SSE is unsupported. Do not read `mcp.json`
+here: pi's loader ignores `--agent-dir`, and the client's list is the whole set.
+ACP `additionalDirectories` widen filesystem
 scope (read/write/edit/grep/find/ls/bash) around `cwd` only when the client sends the
 field, including `[]`. Omitting it keeps pi's existing path behavior. The primary `cwd`
 stays the project for skills and AGENTS.md. `load` / `resume` / `fork` follow the ACP
