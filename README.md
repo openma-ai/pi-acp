@@ -21,7 +21,7 @@ in the editor can be `/resume`d in the terminal and vice versa.
 
 ## Install
 
-Requires Node.js **22.19 or newer** and the Pi **0.85.1** SDK family.
+Requires Node.js **22.19 or newer** and the Pi **1.1.0** SDK family.
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent   # pi itself
@@ -76,7 +76,7 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `/steering`, `/follow-up`, `/queue`, `/bash`, `/reload`, `/changelog`) plus pi prompt
   templates, `/skill:<name>`, and extension
   commands — all advertised through `available_commands_update`.
-- **MCP** — ACP `mcpServers` mount stdio and Streamable HTTP tools through the official MCP client onto Pi's native custom-tool API. New, loaded, and resumed sessions use the descriptors supplied by the client; connections close with the session. SSE is not advertised.
+- **MCP** — ACP `mcpServers` are registered on pi 1.1.0's MCP extension with deferred exposure. `tool_search` loads a tool before the model calls it; stdio and streamable HTTP stay supported. Connections close with the session. Legacy SSE is not advertised.
 - **Client delegation** — when the client advertises `fs.readTextFile` / `fs.writeTextFile`,
   pi's `read`/`edit`/`write` go through the editor (unsaved buffers, in-editor edits); with
   `terminal`, `bash` runs in a client-owned terminal. Disable with `--no-delegation`.
@@ -160,8 +160,21 @@ from there. Only persisted, completed messages can be a fork point.
 ## MCP tools over ACP
 
 The ACP client supplies `mcpServers` when it creates, loads, or resumes a session.
-The adapter connects directly and registers the discovered tools through Pi's SDK;
-no MCP extension or separate Pi configuration file is required.
+Those descriptors are registered with pi's built-in MCP extension for that session
+only (`pi.registerMcpServer`). The adapter does not open its own MCP client, and it
+does not read `mcp.json`: pi's loader always uses the default agent directory, and
+the client's list is the whole set. An empty `mcpServers` array leaves the session
+with no client MCP servers. Connections close when the session does, including
+stdio children (stdin close, then SIGTERM, then SIGKILL).
+
+Each ACP server uses exposure `deferred`. Pi activates `tool_search`, and the model
+loads a tool before calling it. The call is a normal ACP `tool_call` /
+`tool_call_update` with kind, title, raw input, and raw output. A call another
+tool makes with `executeTool` also carries `_meta.pi.parentToolCallId`. Pi's
+default for its own `mcp.json` is script-only `codemode`; these client servers
+are deferred instead, so the client sees the MCP tool itself. Pi converts text,
+images, and embedded resources, keeps structured results, and reports MCP
+errors as failed tool calls.
 
 For example, an ACP session request can include a local project coordination server:
 
@@ -179,17 +192,22 @@ For example, an ACP session request can include a local project coordination ser
 ```
 
 A remote tool named `project.delegate` appears to Pi as
-`mcp__Project__project_delegate`. Names are normalized, bounded to 64 characters,
-and disambiguated; calls still use the original remote name. Both stdio and
-Streamable HTTP servers are supported, including JSON and streamed HTTP responses.
-Legacy SSE transport is not supported.
+`mcp__Project__project_delegate`. Pi's names keep that shape: every character
+other than letters, digits, and `_` becomes `_` (so `-` in a server name becomes
+`_` in the tool name), and a name longer than 64 characters or a sanitizer
+collision gets an 8-character hash suffix. The call still uses the original
+remote name. Server names that differ only by `-` and `_` share one namespace;
+the adapter suffixes the later one (`a_b_2`). Both stdio and streamable HTTP are
+supported, including JSON and streamed HTTP responses. Legacy SSE is rejected
+and reported in session diagnostics.
 
-Tool discovery follows pagination. Results retain text, images, and structured
-receipts; tool failures and cancellation propagate back to Pi. Connections belong
-to the ACP session and close on teardown or failed initialization. A server that
-cannot initialize is reported in diagnostics and skipped. On reconnect, clients
-should call `session/load` or `session/resume` with current descriptors and credentials;
-an empty `mcpServers` array removes the previous session's MCP tools.
+Header and environment values are sent literally. The session working directory
+is the stdio server's cwd, and the process environment is inherited with the
+client's variables overlaid. Pi follows paginated `tools/list`. A server that
+cannot be described (SSE, a bad URL, a name pi will not accept) is skipped and
+named in diagnostics; the other servers still connect. On reconnect, clients
+should call `session/load` or `session/resume` with current descriptors and
+credentials.
 
 ## Configuration
 
@@ -227,7 +245,7 @@ openma-pi-acp
         ├─ commands.ts, builtin-commands.ts
         ├─ ui-context.ts      pi ExtensionUIContext over elicitation / permission
         ├─ delegation.ts      client fs + terminal backed pi tools
-        ├─ mcp.ts             session-scoped MCP clients → Pi custom tools
+        ├─ mcp.ts             ACP mcpServers → pi's MCP extension (deferred tools)
         └─ extension-events.ts  pi.events → extension_event
    ▼
 @earendil-works/pi-coding-agent (sessions, models, tools, extensions, skills, compaction, …)

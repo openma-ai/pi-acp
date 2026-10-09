@@ -6,6 +6,7 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
+import { modelLookupCandidates } from "./model-aliases.ts";
 
 export const CONFIG_MODEL = "model";
 export const CONFIG_THINKING = "thinking";
@@ -15,12 +16,19 @@ export function modelValue(model: Pick<Model<string>, "provider" | "id">): strin
   return `${model.provider}/${model.id}`;
 }
 
-/** Resolve `provider/id` (preferred) or a bare model id against the available models. */
-export function findModel(models: readonly Model<string>[], value: string): Model<string> | undefined {
+function findExact(models: readonly Model<string>[], value: string): Model<string> | undefined {
   const exact = models.find((model) => modelValue(model) === value);
   if (exact !== undefined) return exact;
   const byId = models.filter((model) => model.id === value);
-  if (byId.length === 1) return byId[0];
+  return byId.length === 1 ? byId[0] : undefined;
+}
+
+/** Resolve `provider/id` (preferred) or a bare model id against the available models. */
+export function findModel(models: readonly Model<string>[], value: string): Model<string> | undefined {
+  for (const candidate of modelLookupCandidates(value)) {
+    const exact = findExact(models, candidate);
+    if (exact !== undefined) return exact;
+  }
   const lowered = value.toLowerCase();
   const fuzzy = models.filter(
     (model) =>

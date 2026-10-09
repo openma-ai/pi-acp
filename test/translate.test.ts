@@ -228,6 +228,43 @@ describe("SessionProjection streaming", () => {
     });
   });
 
+  it("projects a searched MCP tool, including a nested call's parent", () => {
+    const p = projection();
+    const start = p.onEvent({
+      type: "tool_execution_start",
+      toolCallId: "mcp-1",
+      toolName: "mcp__Project__project_delegate",
+      args: { task: "review" },
+      parentToolCallId: "code-1",
+    });
+    expect(start[0]).toMatchObject({
+      sessionUpdate: "tool_call",
+      toolCallId: "mcp-1",
+      name: "mcp__Project__project_delegate",
+      kind: "other",
+      title: "Project: project_delegate",
+      status: "in_progress",
+      rawInput: { task: "review" },
+      _meta: { pi: { parentToolCallId: "code-1" } },
+    });
+    const end = p.onEvent({
+      type: "tool_execution_end",
+      toolCallId: "mcp-1",
+      toolName: "mcp__Project__project_delegate",
+      result: {
+        content: [{ type: "text", text: "accepted" }],
+        details: { server: "Project", tool: "project.delegate" },
+      },
+      isError: false,
+    });
+    expect(end[0]).toMatchObject({
+      sessionUpdate: "tool_call_update",
+      status: "completed",
+      rawOutput: { content: [{ type: "text", text: "accepted" }] },
+      content: [{ type: "content", content: { type: "text", text: "accepted" } }],
+    });
+  });
+
   it("maps stop reasons", () => {
     expect(assistantStopReasonToAcp(assistant({ stopReason: "aborted" }))).toBe("cancelled");
     expect(assistantStopReasonToAcp(assistant({ stopReason: "length" }))).toBe("max_tokens");

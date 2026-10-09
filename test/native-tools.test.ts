@@ -114,6 +114,7 @@ it("injects MCP tools through ACP and remounts the caller's current servers on l
     const sessionId = created.sessionId;
     const prompt = async (task: string) => {
       h.respond(
+        fauxAssistantMessage([fauxToolCall("tool_search", { query: "delegate task" })]),
         fauxAssistantMessage([fauxToolCall("mcp__Project__project_delegate", { task })]),
         fauxAssistantMessage("done"),
       );
@@ -126,10 +127,16 @@ it("injects MCP tools through ACP and remounts the caller's current servers on l
     await prompt("loaded");
     await h.client.resumeSession({ sessionId, cwd: h.workspace, mcpServers: [descriptor("resumed")] });
     await prompt("resumed");
-    expect(calls).toEqual(
+    expect(
+      calls.map((call) => {
+        const params = call.params as { name: string; arguments: { task: string } };
+        return { authorization: call.authorization, name: params.name, task: params.arguments.task };
+      }),
+    ).toEqual(
       ["initial", "loaded", "resumed"].map((task, index) => ({
         authorization: `Bearer ${["first", "loaded", "resumed"][index]}`,
-        params: { name: "project.delegate", arguments: { task } },
+        name: "project.delegate",
+        task,
       })),
     );
     expect(

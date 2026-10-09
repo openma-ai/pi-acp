@@ -102,7 +102,23 @@ describe("additionalDirectories client flow", () => {
 
     let systemPrompt = "";
     harness.respond((context) => {
-      systemPrompt = context.systemPrompt ?? "";
+      systemPrompt = context.messages
+        .filter((message) => message.role === "system")
+        .map((message) => {
+          const content = message.content;
+          const text =
+            typeof content === "string"
+              ? content
+              : content.map((block) => ("text" in block ? block.text : "")).join("");
+          const sections =
+            "sections" in message
+              ? Object.values(message.sections ?? {}).filter(
+                  (section): section is string => typeof section === "string",
+                )
+              : [];
+          return [text, ...sections].join("\n");
+        })
+        .join("\n");
       return fauxAssistantMessage("hi");
     });
     await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "hi" }] });

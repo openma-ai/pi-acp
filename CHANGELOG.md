@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.7 — 2026-10-09
+
+- Require the pi 1.1.0 SDK (`@earendil-works/pi-coding-agent`, `pi-ai`, and
+  `pi-agent-core`).
+- ACP `mcpServers` register on pi's MCP extension with `deferred` exposure.
+  `tool_search` loads a tool, then the model calls it. ACP `tool_call` and
+  `tool_call_update` events still carry kind, title, raw input, and raw output.
+  Stdio and streamable HTTP stay supported, including paginated tool lists,
+  literal headers and env, the session cwd, and shutdown of stdio children.
+  Legacy SSE is still rejected. Tool names stay `mcp__<server>__<tool>`; pi
+  replaces characters other than letters, digits, and `_`, and uses a hash
+  suffix when names collide or exceed 64 characters. `mcp.json` is not read.
+- Catalog ids renamed in pi 1.1.0 still resolve: `deepseek-v4-flash` and
+  `deepseek-v4-flash-vision-exp` to `deepseek-flash`, dotted Claude ids such as
+  `claude-haiku-4.5` to `claude-haiku-4-5`, and provider `azure-openai-responses`
+  to `azure`.
+- Nested tool calls carry `_meta.pi.parentToolCallId`.
+
 ## 0.1.6 — 2026-10-03
 
 - Assistant `messageId`s stream with each token. The id is

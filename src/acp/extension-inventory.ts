@@ -43,9 +43,11 @@ export function extensionInventory(session: AgentSession): ExtensionInventoryEnt
 
 /** Tool name → owning extension path (extension-registered tools only). */
 export function toolOwnerLookup(session: AgentSession): (toolName: string) => string | undefined {
-  const owners = new Map<string, string>();
-  for (const extension of session.resourceLoader.getExtensions().extensions) {
-    for (const name of extension.tools.keys()) owners.set(name, extension.path);
-  }
-  return (toolName) => owners.get(toolName);
+  // MCP tools register after the session binds, once the server connects.
+  return (toolName) => {
+    for (const extension of session.resourceLoader.getExtensions().extensions) {
+      if (extension.tools.has(toolName)) return extension.path;
+    }
+    return undefined;
+  };
 }

@@ -4,8 +4,6 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpServer } from "@agentclientprotocol/sdk";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -15,20 +13,70 @@ import {
   type CallToolResult,
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mountMcpServers, type McpMountResult } from "../src/acp/mcp.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { literalConfigValue, planAcpMcpServers } from "../src/acp/mcp.ts";
+import { fauxAssistantMessage, fauxToolCall, Harness } from "./helpers/harness.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-  vi.restoreAllMocks();
+});
+
+describe("ACP MCP server plan", () => {
+  it("keeps header and env values literal and asks pi for deferred tools", () => {
+    expect(literalConfigValue("Bearer $literal")).toBe("Bearer $$literal");
+    expect(literalConfigValue("!echo secret")).toBe("$!echo secret");
+    const plan = planAcpMcpServers([
+      {
+        type: "http",
+        name: "My.Project",
+        url: "http://127.0.0.1:9/mcp",
+        headers: [{ name: "Authorization", value: "Bearer $literal" }],
+      },
+      {
+        name: "Local MCP",
+        command: "node",
+        args: ["server.js"],
+        env: [{ name: "MCP_TEST_FLAG", value: "descriptor-value" }],
+      },
+    ]);
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.servers.map((server) => server.name)).toEqual(["My_Project", "Local_MCP"]);
+    expect(plan.servers[0]?.config).toMatchObject({
+      exposure: "deferred",
+      url: "http://127.0.0.1:9/mcp",
+      headers: { Authorization: "Bearer $$literal" },
+    });
+    expect(plan.servers[1]?.config).toMatchObject({
+      exposure: "deferred",
+      command: "node",
+      args: ["server.js"],
+      env: { MCP_TEST_FLAG: "descriptor-value" },
+    });
+  });
+
+  it("rejects legacy SSE and names that share a pi namespace", () => {
+    const sse = planAcpMcpServers([{ type: "sse", name: "Old", url: "http://127.0.0.1:9/sse", headers: [] }]);
+    expect(sse.servers).toEqual([]);
+    expect(sse.diagnostics[0]).toMatch(/SSE/);
+
+    const clash = planAcpMcpServers([
+      { name: "a-b", command: "node", args: [], env: [] },
+      { name: "a_b", command: "node", args: [], env: [] },
+    ]);
+    expect(clash.diagnostics).toEqual([]);
+    expect(clash.servers.map((server) => server.name)).toEqual(["a-b", "a_b_2"]);
+
+    const bad = planAcpMcpServers([{ type: "http", name: "Broken", url: "not a url", headers: [] }]);
+    expect(bad.servers).toEqual([]);
+    expect(bad.diagnostics[0]).toMatch(/url/);
+  });
 });
 
 async function endpoint(
   options: {
     list?: (cursor?: string) => ListToolsResult | Promise<ListToolsResult>;
     call?: (params: CallToolRequest["params"]) => CallToolResult | Promise<CallToolResult>;
-    json?: boolean;
   } = {},
 ) {
   const requests: Array<{ method: string; authorization?: string }> = [];
@@ -40,9 +88,12 @@ async function endpoint(
     }
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
-    const body = JSON.parse(Buffer.concat(chunks).toString()) as { method: string };
-    requests.push({ method: body.method, authorization: req.headers.authorization });
-    if (req.headers.authorization !== "Bearer test-project-token") {
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as { method?: string };
+    requests.push({
+      method: body.method ?? "",
+      authorization: typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
+    });
+    if (req.headers.authorization !== "Bearer $literal") {
       res.writeHead(403).end();
       return;
     }
@@ -53,17 +104,24 @@ async function endpoint(
       ({ params }) =>
         options.list?.(params?.cursor) ?? {
           tools: [
-            { name: "project.delegate", description: "Delegate a task", inputSchema: { type: "object" } },
+            {
+              name: "project.delegate",
+              description: "Delegate a task",
+              inputSchema: { type: "object", properties: { task: { type: "string" } } },
+            },
           ],
         },
     );
     server.setRequestHandler(
       CallToolRequestSchema,
-      ({ params }) => options.call?.(params) ?? { content: [{ type: "text", text: "accepted" }] },
+      ({ params }) =>
+        options.call?.(params) ?? {
+          content: [{ type: "text", text: "accepted" }],
+        },
     );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
-      enableJsonResponse: options.json ?? true,
+      enableJsonResponse: true,
     });
     res.on("close", () => {
       void server.close();
@@ -82,212 +140,182 @@ async function endpoint(
     type: "http",
     name: "Project",
     url: `http://127.0.0.1:${(http.address() as AddressInfo).port}/mcp`,
-    headers: [{ name: "Authorization", value: "Bearer test-project-token" }],
+    headers: [{ name: "Authorization", value: "Bearer $literal" }],
   };
   return { descriptor, requests };
 }
 
-async function mount(descriptors: McpServer[]): Promise<McpMountResult> {
-  const result = await mountMcpServers(descriptors, process.cwd());
-  cleanups.push(async () => {
-    await Promise.all(result.mounts.map((entry) => entry.close()));
-  });
-  return result;
+function toolCalls(updates: ReturnType<Harness["updatesFor"]>) {
+  return updates.filter((update) => update.sessionUpdate === "tool_call");
 }
 
-function execute(tool: ToolDefinition, args: Record<string, unknown> = {}, signal?: AbortSignal) {
-  return tool.execute("call-1", args, signal, undefined, {} as ExtensionContext);
-}
-
-describe("ACP MCP tools", () => {
-  it.each([true, false])(
-    "mounts authenticated HTTP tools and preserves the delegation receipt (JSON=%s)",
-    async (json) => {
-      const calls: CallToolRequest["params"][] = [];
-      const remote = await endpoint({
-        json,
-        call: (params) => {
-          calls.push(params);
-          return {
-            content: [{ type: "text", text: "Worker started" }],
-            structuredContent: { workerId: "worker-7", accepted: true },
-          };
-        },
-      });
-      const result = await mount([remote.descriptor]);
-      expect(result.diagnostics).toEqual([]);
-      expect(result.tools.map((tool) => tool.name)).toEqual(["mcp__Project__project_delegate"]);
-      const output = await execute(result.tools[0]!, { task: "review" });
-      expect(calls).toEqual([{ name: "project.delegate", arguments: { task: "review" } }]);
-      expect(output.content).toEqual([{ type: "text", text: "Worker started" }]);
-      expect(output.details).toMatchObject({
-        tool: "project.delegate",
-        structuredContent: { workerId: "worker-7", accepted: true },
-      });
-      expect(remote.requests.map((request) => request.method)).toEqual([
-        "initialize",
-        "notifications/initialized",
-        "tools/list",
-        "tools/call",
-      ]);
-      expect(remote.requests.every((request) => request.authorization === "Bearer test-project-token")).toBe(
-        true,
-      );
-    },
-  );
-
-  it("includes every tools/list page with unique provider-safe names", async () => {
-    const cursors: Array<string | undefined> = [];
-    const calls: string[] = [];
-    const names = ["project.delegate", "project_delegate", "x".repeat(100), "x".repeat(99) + "y"];
+describe("ACP session MCP calls", () => {
+  it("searches a deferred HTTP tool and projects the call", async () => {
+    const calls: CallToolRequest["params"][] = [];
     const remote = await endpoint({
-      list: (cursor) => {
-        cursors.push(cursor);
+      call: (params) => {
+        calls.push(params);
+        if (params.arguments?.fail === true) {
+          return { isError: true, content: [{ type: "text", text: "Worker quota exceeded" }] };
+        }
         return {
-          tools: (cursor ? names.slice(1) : names.slice(0, 1)).map((name) => ({
-            name,
-            inputSchema: { type: "object" as const },
-          })),
-          ...(cursor ? {} : { nextCursor: "next" }),
+          content: [
+            { type: "text", text: "Worker started" },
+            { type: "image", data: "AQID", mimeType: "image/png" },
+            { type: "resource", resource: { uri: "file:///note.txt", text: "from-resource" } },
+          ],
+          structuredContent: { workerId: "worker-7", accepted: true },
         };
       },
+    });
+    const harness = await Harness.create();
+    cleanups.push(() => harness.close());
+    await harness.initialize();
+    const created = await harness.client.newSession({
+      cwd: harness.workspace,
+      mcpServers: [remote.descriptor],
+    });
+    const sessionId = created.sessionId;
+
+    harness.respond(
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "delegate task" })]),
+      fauxAssistantMessage([fauxToolCall("mcp__Project__project_delegate", { task: "review" })]),
+      fauxAssistantMessage("done"),
+    );
+    expect(
+      await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "delegate" }] }),
+    ).toMatchObject({
+      stopReason: "end_turn",
+    });
+
+    expect(calls.map(({ name, arguments: args }) => ({ name, arguments: args }))).toEqual([
+      { name: "project.delegate", arguments: { task: "review" } },
+    ]);
+    expect(remote.requests.some((request) => request.method === "tools/list")).toBe(true);
+    expect(
+      remote.requests
+        .filter((request) => request.method === "tools/call")
+        .every((request) => request.authorization === "Bearer $literal"),
+    ).toBe(true);
+    const updates = harness.updatesFor(sessionId);
+    expect(toolCalls(updates).map((update) => update.name)).toEqual([
+      "tool_search",
+      "mcp__Project__project_delegate",
+    ]);
+    expect(toolCalls(updates)[1]).toMatchObject({
+      kind: "other",
+      title: "Project: project_delegate",
+      rawInput: { task: "review" },
+    });
+    const completed = updates.find(
+      (update) =>
+        update.sessionUpdate === "tool_call_update" &&
+        update.status === "completed" &&
+        JSON.stringify(update.rawOutput).includes("Worker started"),
+    );
+    const rendered = JSON.stringify(completed);
+    expect(rendered).toContain("Worker started");
+    expect(rendered).toContain("from-resource");
+    expect(rendered).toContain("worker-7");
+    expect(completed).toMatchObject({
+      content: expect.arrayContaining([
+        { type: "content", content: { type: "image", data: "AQID", mimeType: "image/png" } },
+      ]),
+    });
+
+    harness.respond(
+      fauxAssistantMessage([fauxToolCall("mcp__Project__project_delegate", { task: "again", fail: true })]),
+      fauxAssistantMessage("done"),
+    );
+    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "fail" }] });
+    expect(
+      harness
+        .updatesFor(sessionId)
+        .some(
+          (update) =>
+            update.sessionUpdate === "tool_call_update" &&
+            update.status === "failed" &&
+            JSON.stringify(update).includes("Worker quota exceeded"),
+        ),
+    ).toBe(true);
+  }, 30_000);
+
+  it("loads a tool that was listed on a later page", async () => {
+    const names: string[] = [];
+    const remote = await endpoint({
+      list: (cursor) =>
+        cursor
+          ? {
+              tools: [
+                { name: "beta.two", description: "beta unique marker", inputSchema: { type: "object" } },
+              ],
+            }
+          : {
+              tools: [{ name: "alpha.one", description: "alpha", inputSchema: { type: "object" } }],
+              nextCursor: "next",
+            },
       call: (params) => {
-        calls.push(params.name);
-        return { content: [] };
+        names.push(params.name);
+        return { content: [{ type: "text", text: "paged" }] };
       },
     });
-    remote.descriptor.name = "My.Project";
-    const result = await mount([remote.descriptor]);
-    expect(cursors).toEqual([undefined, "next"]);
-    expect(result.tools).toHaveLength(4);
-    expect(new Set(result.tools.map((tool) => tool.name)).size).toBe(4);
-    for (const tool of result.tools) {
-      expect(tool.name).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
-      await execute(tool);
-    }
-    expect(calls).toEqual(names);
-  });
+    const harness = await Harness.create();
+    cleanups.push(() => harness.close());
+    await harness.initialize();
+    const sessionId = await harness.client
+      .newSession({ cwd: harness.workspace, mcpServers: [remote.descriptor] })
+      .then((created) => created.sessionId);
+    harness.respond(
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "beta unique marker" })]),
+      fauxAssistantMessage([fauxToolCall("mcp__Project__beta_two", {})]),
+      fauxAssistantMessage("done"),
+    );
+    await harness.client.prompt({ sessionId, prompt: [{ type: "text", text: "beta" }] });
+    expect(names).toEqual(["beta.two"]);
+  }, 30_000);
 
-  it("makes structured-only results visible to Pi and propagates MCP tool errors", async () => {
-    const remote = await endpoint({
-      call: ({ arguments: args }) =>
-        args?.fail
-          ? { isError: true, content: [{ type: "text", text: "Worker quota exceeded" }] }
-          : { content: [], structuredContent: { workerId: "worker-8" } },
-    });
-    const { tools } = await mount([remote.descriptor]);
-    const result = await execute(tools[0]!);
-    expect(result.content).toEqual([{ type: "text", text: '{"workerId":"worker-8"}' }]);
-    await expect(execute(tools[0]!, { fail: true })).rejects.toThrow("Worker quota exceeded");
-  });
-
-  it("keeps names unique across ambiguous server and tool namespaces", async () => {
-    const first = await endpoint({
-      list: () => ({ tools: [{ name: "B__C", inputSchema: { type: "object" } }] }),
-    });
-    const second = await endpoint({
-      list: () => ({ tools: [{ name: "C", inputSchema: { type: "object" } }] }),
-    });
-    first.descriptor.name = "A";
-    second.descriptor.name = "A__B";
-    const result = await mount([first.descriptor, second.descriptor]);
-    expect(result.tools.map((tool) => tool.name)).toEqual(["mcp__A__B__C", "mcp__A__B__C_2"]);
-  });
-
-  it("aborts an in-flight tool call rather than accepting its late result", async () => {
-    let acknowledge!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      acknowledge = resolve;
-    });
-    let finish!: (result: CallToolResult) => void;
-    const remote = await endpoint({
-      call: () => {
-        acknowledge();
-        return new Promise<CallToolResult>((resolve) => {
-          finish = resolve;
-        });
-      },
-    });
-    const { tools } = await mount([remote.descriptor]);
-    const controller = new AbortController();
-    const result = execute(tools[0]!, {}, controller.signal);
-    const rejected = expect(result).rejects.toThrow(/abort|cancel/i);
-    await entered;
-    controller.abort(new Error("cancelled by user"));
-    await rejected;
-    finish({ content: [{ type: "text", text: "late success" }] });
-  });
-
-  it("closes a connection whose tool discovery fails while keeping healthy servers", async () => {
-    const close = vi.spyOn(Client.prototype, "close");
-    const broken = await endpoint({
-      list: () => {
-        throw new Error("discovery failed");
-      },
-    });
-    const healthy = await endpoint();
-    const result = await mount([broken.descriptor, healthy.descriptor]);
-    expect(result.mounts).toHaveLength(1);
-    expect(result.tools).toHaveLength(1);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]).toContain("discovery failed");
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects a repeated pagination cursor instead of looping forever", async () => {
-    const remote = await endpoint({ list: () => ({ tools: [], nextCursor: "same" }) });
-    const result = await mount([remote.descriptor]);
-    expect(result.tools).toEqual([]);
-    expect(result.diagnostics[0]).toMatch(/cursor|pagination/i);
-    expect(remote.requests.filter((request) => request.method === "tools/list")).toHaveLength(2);
-  });
-
-  it.each([false, true])(
-    "releases the real stdio child after close or failed discovery (failure=%s)",
-    async (failList) => {
-      const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-acp-mcp-")));
-      cleanups.push(() => rm(cwd, { recursive: true, force: true }));
-      const script = `
+  it("runs a stdio server in the session cwd and stops it on close", async () => {
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-acp-mcp-")));
+    cleanups.push(() => rm(cwd, { recursive: true, force: true }));
+    const script = `
       import { writeFileSync } from "node:fs";
       import { Server } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/index.js"))};
       import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};
       import { ListToolsRequestSchema, CallToolRequestSchema } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/types.js"))};
       writeFileSync("pid", String(process.pid));
       const server = new Server({ name: "stdio-test", version: "1" }, { capabilities: { tools: {} } });
-      server.setRequestHandler(ListToolsRequestSchema, () => {
-        if (${failList}) throw new Error("stdio discovery failed");
-        return { tools: [{ name: "workspace.info", inputSchema: { type: "object" } }] };
-      });
+      server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [{ name: "workspace.info", description: "Report cwd and flag", inputSchema: { type: "object" } }] }));
       server.setRequestHandler(CallToolRequestSchema, () => ({ content: [{ type: "text", text: JSON.stringify({ cwd: process.cwd(), flag: process.env.MCP_TEST_FLAG }) }] }));
       await server.connect(new StdioServerTransport());
     `;
-      const result = await mountMcpServers(
-        [
-          {
-            name: "Local MCP",
-            command: process.execPath,
-            args: ["--input-type=module", "-e", script],
-            env: [{ name: "MCP_TEST_FLAG", value: "descriptor-value" }],
-          },
-        ],
-        cwd,
-      );
-      cleanups.push(async () => {
-        await Promise.all(result.mounts.map((entry) => entry.close()));
-      });
-      const pid = Number(await readFile(join(cwd, "pid"), "utf8"));
-      if (failList) {
-        expect(result.tools).toEqual([]);
-        expect(result.diagnostics[0]).toContain("stdio discovery failed");
-      } else {
-        expect(result.diagnostics).toEqual([]);
-        const output = await execute(result.tools[0]!);
-        expect(output.content).toEqual([
-          { type: "text", text: JSON.stringify({ cwd, flag: "descriptor-value" }) },
-        ]);
-        await result.mounts[0]!.close();
-      }
-      expect(() => process.kill(pid, 0)).toThrow();
-    },
-  );
+    const harness = await Harness.create();
+    cleanups.push(() => harness.close());
+    await harness.initialize();
+    const created = await harness.client.newSession({
+      cwd,
+      mcpServers: [
+        {
+          name: "Local MCP",
+          command: process.execPath,
+          args: ["--input-type=module", "-e", script],
+          env: [{ name: "MCP_TEST_FLAG", value: "descriptor-value" }],
+        },
+      ],
+    });
+    harness.respond(
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "workspace cwd flag" })]),
+      fauxAssistantMessage([fauxToolCall("mcp__Local_MCP__workspace_info", {})]),
+      fauxAssistantMessage("done"),
+    );
+    await harness.client.prompt({
+      sessionId: created.sessionId,
+      prompt: [{ type: "text", text: "workspace" }],
+    });
+    const rendered = JSON.stringify(harness.updatesFor(created.sessionId));
+    expect(rendered).toContain(cwd);
+    expect(rendered).toContain("descriptor-value");
+    const pid = Number(await readFile(join(cwd, "pid"), "utf8"));
+    await harness.close();
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 30_000);
 });
