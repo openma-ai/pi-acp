@@ -8,7 +8,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, Harness } from "./helpers/harness.ts";
 
 let harness: Harness | undefined;
@@ -117,6 +117,84 @@ describe("auth", () => {
       { elicitationId: string; url: string } | undefined;
     expect(url).toMatchObject({ url: "https://faux.example/authorize" });
     expect(harness.completedElicitations).toEqual([url?.elicitationId]);
+  });
+
+  it("reports an oauth-backed provider as oauth when re-authenticated without a key", async () => {
+    harness = await Harness.create({
+      providers: [oauthProvider()],
+      clientCapabilities: { elicitation: { form: {} } },
+      onElicitation: () => ({ action: "accept", content: { code: "good-code" } }),
+    });
+    await harness.initialize();
+    await harness.client.authenticate({ methodId: "oauth:faux-oauth" });
+    const result = await harness.client.authenticate({ methodId: "api-key:faux-oauth" });
+    expect(result._meta).toMatchObject({ pi: { auth: { provider: "faux-oauth", kind: "oauth" } } });
+  });
+
+  it("rejects oauth on a provider without an OAuth flow", async () => {
+    harness = await Harness.create();
+    await harness.initialize();
+    await expect(harness.client.authenticate({ methodId: "oauth:faux" })).rejects.toMatchObject({
+      code: -32602,
+      message: expect.stringContaining("no OAuth login"),
+    });
+  });
+
+  it("surfaces an internal error when the oauth path has no request id", async () => {
+    harness = await Harness.create({
+      providers: [oauthProvider()],
+      clientCapabilities: { elicitation: { form: {} } },
+      wireRequestIds: false,
+    });
+    await harness.initialize();
+    await expect(harness.client.authenticate({ methodId: "oauth:faux-oauth" })).rejects.toMatchObject({
+      code: -32603,
+      message: expect.stringContaining("request id"),
+    });
+  });
+
+  it("requires an elicitation-capable client for oauth", async () => {
+    harness = await Harness.create({ providers: [oauthProvider()] });
+    await harness.initialize();
+    await expect(harness.client.authenticate({ methodId: "oauth:faux-oauth" })).rejects.toMatchObject({
+      code: -32000,
+      message: expect.stringContaining("elicitation"),
+      data: { authMethods: expect.any(Array) },
+    });
+  });
+
+  it("maps a provider-side oauth failure to auth_required", async () => {
+    harness = await Harness.create({
+      providers: [oauthProvider()],
+      clientCapabilities: { elicitation: { form: {} } },
+      onElicitation: () => ({ action: "accept", content: { code: "wrong" } }),
+    });
+    await harness.initialize();
+    await expect(harness.client.authenticate({ methodId: "oauth:faux-oauth" })).rejects.toMatchObject({
+      code: -32000,
+      message: expect.stringContaining("login with faux-oauth failed"),
+    });
+  });
+
+  it("aborts an oauth flow on the auth-flow timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      harness = await Harness.create({
+        providers: [oauthProvider()],
+        clientCapabilities: { elicitation: { form: {} } },
+        onElicitation: () => new Promise(() => undefined),
+      });
+      await harness.initialize();
+      const attempt = harness.client.authenticate({ methodId: "oauth:faux-oauth" });
+      attempt.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      await expect(attempt).rejects.toMatchObject({
+        code: -32000,
+        message: expect.stringContaining("cancelled"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports a cancelled login as auth_required", async () => {

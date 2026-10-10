@@ -5,28 +5,11 @@
  * stdout is reserved for the protocol; every diagnostic goes to stderr.
  */
 
-import { spawnSync } from "node:child_process";
 import { logError } from "./log.ts";
 import { serve } from "./server.ts";
 import { HELP_TEXT, resolveSettings, SettingsError } from "./settings.ts";
+import { terminalLogin } from "./terminal-login.ts";
 import { PACKAGE_NAME, VERSION } from "./version.ts";
-
-function terminalLogin(): number {
-  const command = process.platform === "win32" ? "pi.cmd" : "pi";
-  const result = spawnSync(command, [], {
-    stdio: "inherit",
-    env: process.env,
-    shell: process.platform === "win32",
-  });
-  if (result.error !== undefined && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-    process.stderr.write(
-      `${PACKAGE_NAME}: could not start pi (command not found). Install it with ` +
-        "`npm install -g @earendil-works/pi-coding-agent` or ensure `pi` is on your PATH.\n",
-    );
-    return 1;
-  }
-  return typeof result.status === "number" ? result.status : 1;
-}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -39,7 +22,7 @@ async function main(): Promise<void> {
     return;
   }
   if (argv.includes("--terminal-login")) {
-    process.exitCode = terminalLogin();
+    process.exitCode = await terminalLogin(argv);
     return;
   }
 

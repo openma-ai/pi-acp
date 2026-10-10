@@ -75,6 +75,17 @@ export function isBuiltinCommand(name: string): boolean {
   return BUILTIN_COMMANDS.some((command) => command.name === name);
 }
 
+/**
+ * pi's own auth commands. They are never advertised (not in BUILTIN_COMMANDS)
+ * and never reach the model — a prompt for one ends the turn with
+ * auth_required + data.authMethods so the client shows its auth UI instead.
+ */
+const NATIVE_AUTH_COMMANDS = new Set(["login", "logout"]);
+
+export function isNativeAuthCommand(name: string): boolean {
+  return NATIVE_AUTH_COMMANDS.has(name);
+}
+
 export interface ParsedSlashCommand {
   name: string;
   args: string;

@@ -12,17 +12,19 @@ the spelling of the external contract they implement (`terminal_output`,
 
 The adapter reads these paths from `initialize.params.clientCapabilities`:
 
-| Path                                               | Type           | Effect                                                                                                                        |
-| -------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `clientCapabilities._meta.terminal_output`         | literal `true` | Shell tool calls carry a display terminal (`terminal_info`/`terminal_output`/`terminal_exit`). Codex/Zed extension.           |
-| `clientCapabilities._meta["terminal-auth"]`        | literal `true` | Adds Zed's `_meta["terminal-auth"]` launch spec to the terminal auth method.                                                  |
-| `clientCapabilities._meta.terminal_output_delta`   | literal `true` | Same as `terminal_output` with the streaming key spelled `terminal_output_delta` (newer Codex convention).                    |
-| `clientCapabilities.elicitation.url`               | object         | OAuth logins open the browser URL through `elicitation/create` `mode: "url"`; `oauth:<provider>` auth methods are advertised. |
-| `clientCapabilities.session.configOptions.boolean` | object         | `auto_compaction` is a `boolean` option; without it, a `select` with `on`/`off`.                                              |
-| `clientCapabilities.fs.readTextFile`               | `true`         | pi's `read`/`edit` read through `fs/read_text_file` (unsaved editor buffers).                                                 |
-| `clientCapabilities.fs.writeTextFile`              | `true`         | pi's `edit`/`write` write through `fs/write_text_file`.                                                                       |
-| `clientCapabilities.terminal`                      | `true`         | pi's `bash` runs in a client terminal (`terminal/create`, streamed by the client).                                            |
-| `clientCapabilities.elicitation.form`              | object         | Extension dialogs (`select`/`confirm`/`input`/`editor`) become `elicitation/create` forms.                                    |
+| Path                                               | Type           | Effect                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clientCapabilities._meta.terminal_output`         | literal `true` | Shell tool calls carry a display terminal (`terminal_info`/`terminal_output`/`terminal_exit`). Codex/Zed extension.                                                                                                                                                                               |
+| `clientCapabilities._meta["terminal-auth"]`        | literal `true` | Adds Zed's `_meta["terminal-auth"]` launch spec to the terminal auth method.                                                                                                                                                                                                                      |
+| `clientCapabilities.auth.terminal`                 | `true`         | The `pi-terminal-login` auth method is advertised (with `args`/`env`, no launch spec).                                                                                                                                                                                                            |
+| `clientCapabilities.auth._meta.gateway`            | `true`         | The `gateway` auth method is advertised; `authenticate` accepts the `_meta.gateway` submission.                                                                                                                                                                                                   |
+| `clientCapabilities._meta.terminal_output_delta`   | literal `true` | Same as `terminal_output` with the streaming key spelled `terminal_output_delta` (newer Codex convention).                                                                                                                                                                                        |
+| `clientCapabilities.elicitation.url`               | object         | OAuth logins open the browser URL through `elicitation/create` `mode: "url"`; `oauth:<provider>` auth methods are advertised. It is also the spec path for an api-key login when `_meta["api-key"]` carries no `apiKey`: the agent serves a one-shot key form on `127.0.0.1` and elicits the URL. |
+| `clientCapabilities.session.configOptions.boolean` | object         | `auto_compaction` is a `boolean` option; without it, a `select` with `on`/`off`.                                                                                                                                                                                                                  |
+| `clientCapabilities.fs.readTextFile`               | `true`         | pi's `read`/`edit` read through `fs/read_text_file` (unsaved editor buffers).                                                                                                                                                                                                                     |
+| `clientCapabilities.fs.writeTextFile`              | `true`         | pi's `edit`/`write` write through `fs/write_text_file`.                                                                                                                                                                                                                                           |
+| `clientCapabilities.terminal`                      | `true`         | pi's `bash` runs in a client terminal (`terminal/create`, streamed by the client).                                                                                                                                                                                                                |
+| `clientCapabilities.elicitation.form`              | object         | Extension dialogs (`select`/`confirm`/`input`/`editor`) become `elicitation/create` forms.                                                                                                                                                                                                        |
 
 The initialize response carries:
 
@@ -107,11 +109,12 @@ already persisted.
 
 ## Authentication metadata
 
-| Method               | Advertised metadata                                                                                   | Meaning                                                                                                          |
-| -------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `pi-terminal-login`  | `_meta["terminal-auth"] = { command, args, label }` (only when the client advertised `terminal-auth`) | Launch `openma-pi-acp --terminal-login`, which runs pi interactively.                                            |
-| `api-key:<provider>` | `_meta["api-key"].provider: string`                                                                   | Provide an API key for one pi provider.                                                                          |
-| `oauth:<provider>`   | `_meta.pi.oauth: { provider, subscription }`                                                          | Run pi's provider OAuth flow over elicitation. Advertised only when the client supports URL or form elicitation. |
+| Method               | Advertised metadata                                                                                                          | Meaning                                                                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pi-terminal-login`  | `args: ["--terminal-login"]`; `_meta["terminal-auth"] = { command, args, label }` when the client advertised `terminal-auth` | Launch a focused in-process login (provider picker → api-key paste or OAuth device/browser flow); it runs pi's SDK directly and needs no `pi` binary. |
+| `api-key:<provider>` | `_meta["api-key"].provider: string`                                                                                          | Provide an API key for one pi provider. Advertised for featured providers and providers with existing credentials.                                    |
+| `gateway`            | `_meta.gateway.protocol: "openai-completions"` (only when the client advertised `auth._meta.gateway`)                        | Store a custom OpenAI-compatible provider entry in `models.json` from a `_meta.gateway` submission.                                                   |
+| `oauth:<provider>`   | `_meta.pi.oauth: { provider, subscription }`                                                                                 | Run pi's provider OAuth flow over elicitation. Advertised only when the client supports URL or form elicitation.                                      |
 
 An `authenticate` request for an API key:
 
@@ -122,6 +125,79 @@ An `authenticate` request for an API key:
 The key is stored through pi's own credential store (`~/.pi/agent/auth.json`),
 so the `pi` CLI sees it too. Request metadata contains secrets and must not be
 logged or persisted as transcript content.
+
+An `api-key:<provider>` authenticate without `_meta["api-key"].apiKey` opens the
+spec path when `elicitation.url` is available: the agent serves a one-shot key
+form on `127.0.0.1`, sends the URL via `elicitation/create` `mode: "url"` with
+`_meta.pi.auth = { provider, event: "api_key" }`, and stores the submitted key.
+Without an elicitation channel the request fails `-32000` naming the alternatives
+(`_meta["api-key"]`, a url-eliciting client, or `pi-terminal-login`).
+
+A `gateway` authenticate:
+
+```json
+{
+  "methodId": "gateway",
+  "_meta": {
+    "gateway": {
+      "baseUrl": "https://gw.example.com/v1",
+      "headers": { "Authorization": "Bearer <key>", "X-Team": "eng" },
+      "providerName": "My Gateway",
+      "models": [{ "id": "m1" }]
+    }
+  }
+}
+```
+
+`baseUrl` must be http(s). `providerName` slugifies into the models.json
+provider id (default `gateway`); `Authorization`/`x-api-key` headers become the
+provider `apiKey`, other headers pass through, `api` defaults to
+`openai-completions`, and `models` may be `[{"id": …}]` or `["id", …]`. The entry
+is merged into `models.json` under `providers` and the runtime refreshes.
+
+`authenticate` on `pi-terminal-login` is rejected `-32602`: terminal methods run
+out of band, so a client must never send them. The launch spec in
+`_meta["terminal-auth"]` re-runs the entry script under `process.execPath` when
+`argv[1]` is a `.js/.ts` file (npx/direct invocation), resolves the package's own
+`bin` name from its `package.json` (global install), else falls back to the
+package bin name — it never hardcodes a launcher.
+
+Every authentication failure (`session/new`, `session/prompt`, `authenticate`)
+returns `-32000` whose `data.authMethods` lists the methods the client can act
+on. Typing pi's `/login`, `/logout`, or another native auth command in a prompt
+ends the turn the same way — the text never reaches the model and credentials
+are unchanged.
+
+`authenticate` and `logout` results report the active account:
+
+```json
+{
+  "_meta": {
+    "pi": {
+      "auth": { "provider": "anthropic", "kind": "api_key" },
+      "authStatus": {
+        "kind": "authenticated",
+        "providers": [{ "providerId": "anthropic", "name": "Anthropic", "kind": "api_key" }]
+      }
+    }
+  }
+}
+```
+
+`logout` is scoped, never a wipe-all. `_meta.pi.logout` selects the scope:
+
+```json
+{ "_meta": { "pi": { "logout": { "provider": "anthropic" } } } }
+{ "_meta": { "pi": { "logout": { "all": true } } } }
+```
+
+Omitting `provider`/`all` targets the configured default provider (the active
+model's provider, `settings.json` `defaultProvider`, or the single removable
+credential); when that is ambiguous the request is `-32602` and names the signed
+in providers plus the `{"all": true}` escape. Clearing removes the provider from
+pi's credential store, the adapter's runtime keys, and its `apiKey`/auth headers
+in `models.json`. The result carries `_meta.pi.logout = { cleared: [providerId…] }`
+and the refreshed `authStatus`; `_auth/status_update` is pushed as usual.
 
 ## Session responses
 

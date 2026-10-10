@@ -8,6 +8,7 @@ import {
   type Agent as AcpAgent,
   type AgentSideConnection,
   type AuthenticateRequest,
+  type AuthenticateResponse,
   type CancelNotification,
   type CloseSessionRequest,
   type DeleteSessionRequest,
@@ -20,6 +21,7 @@ import {
   type LoadSessionRequest,
   type LoadSessionResponse,
   type LogoutRequest,
+  type LogoutResponse,
   type NewSessionRequest,
   type NewSessionResponse,
   type PromptRequest,
@@ -30,12 +32,13 @@ import {
   type SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
 import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { existsSync, unlinkSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { errorMessage, logDebug, logWarn } from "../log.ts";
 import type { Settings } from "../settings.ts";
 import { AGENT_NAME, AGENT_TITLE, VERSION } from "../version.ts";
 import { AuthFlowCancelled, createAcpAuthInteraction } from "./auth-interaction.ts";
+import { captureApiKeyViaUrl } from "./auth-loopback.ts";
 import {
   AUTH_STATUS_META_KEY,
   AUTH_STATUS_UPDATE_METHOD,
@@ -46,12 +49,16 @@ import {
 import {
   apiKeyFromAuthenticate,
   buildAuthMethods,
+  GATEWAY_METHOD_ID,
+  gatewayFromAuthenticate,
+  logoutScopeFromMeta,
   parseAuthMethodId,
   TERMINAL_AUTH_METHOD_ID,
+  terminalLaunchSpec,
   type AuthMethodOptions,
 } from "./auth.ts";
 import { runBuiltinCommand } from "./builtin-commands.ts";
-import { isBuiltinCommand, parseSlashCommand } from "./commands.ts";
+import { isBuiltinCommand, isNativeAuthCommand, parseSlashCommand } from "./commands.ts";
 import {
   CONFIG_AUTO_COMPACTION,
   CONFIG_MODEL,
@@ -110,6 +117,10 @@ export class PiAcpAgent implements AcpAgent {
     delegation: { readTextFile: false, writeTextFile: false, terminal: false },
   };
   private terminalAuthMeta = false;
+  private terminalAuth = false;
+  private gatewayAuth = false;
+  /** Providers whose API key lives only in this process (persistence failed). */
+  private readonly runtimeKeys = new Set<string>();
   private lastAuthStatus: AuthStatus | undefined;
   private closed = false;
 
@@ -122,10 +133,19 @@ export class PiAcpAgent implements AcpAgent {
 
   private authMethodOptions(): AuthMethodOptions {
     return {
+      terminal: this.terminalAuth,
+      gateway: this.gatewayAuth,
       terminalAuthMeta: this.terminalAuthMeta,
       urlElicitation: this.features.urlElicitation,
       formElicitation: this.features.formElicitation,
     };
+  }
+
+  /** -32000 auth_required whose data always carries the current authMethods. */
+  private authError(modelRuntime: ModelRuntime, message: string): RequestError {
+    return authRequired(message, {
+      authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()),
+    });
   }
 
   /** Push `_auth/status_update` when pi's credential picture changed since the last push. */
@@ -317,6 +337,8 @@ export class PiAcpAgent implements AcpAgent {
         : { readTextFile: false, writeTextFile: false, terminal: false },
     };
     this.terminalAuthMeta = meta?.["terminal-auth"] === true;
+    this.terminalAuth = caps?.auth?.terminal === true;
+    this.gatewayAuth = caps?.auth?._meta?.["gateway"] === true;
     let modelRuntime: ModelRuntime | undefined;
     try {
       modelRuntime = await this.modelRuntime();
@@ -361,35 +383,22 @@ export class PiAcpAgent implements AcpAgent {
     return response;
   }
 
-  async authenticate(params: AuthenticateRequest): Promise<void> {
+  async authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
     try {
-      await this.runAuthenticate(params);
+      return await this.runAuthenticate(params);
     } finally {
       void this.publishAuthStatus();
     }
   }
 
-  private async runAuthenticate(params: AuthenticateRequest): Promise<void> {
-    const modelRuntime = await this.modelRuntime();
-    if (params.methodId === TERMINAL_AUTH_METHOD_ID) {
-      // Terminal auth runs out of band (`--terminal-login`); refresh what pi stored.
-      await modelRuntime.refresh({ allowNetwork: false });
-      return;
-    }
-    const submitted = apiKeyFromAuthenticate(params._meta);
-    const parsed = parseAuthMethodId(params.methodId);
-    const provider = submitted.provider ?? parsed?.provider;
-    if (provider === undefined) throw invalidParams(`unknown auth method: ${params.methodId}`);
+  /** What the client just authenticated — reported back so the UI can show the active account. */
+  private authResult(modelRuntime: ModelRuntime, provider: string, kind: string): AuthenticateResponse {
+    return {
+      _meta: piMeta({ auth: { provider, kind }, authStatus: computeAuthStatus(modelRuntime) }),
+    };
+  }
 
-    if (parsed?.type === "oauth" && submitted.apiKey === undefined) {
-      await this.oauthLogin(modelRuntime, provider);
-      return;
-    }
-    if (submitted.apiKey === undefined) {
-      if (modelRuntime.hasConfiguredAuth(provider)) return;
-      throw authRequired(`authenticate ${params.methodId} requires _meta["api-key"].apiKey`);
-    }
-    const apiKey = submitted.apiKey;
+  private async storeApiKey(modelRuntime: ModelRuntime, provider: string, apiKey: string): Promise<void> {
     try {
       await modelRuntime.login(provider, "api_key", {
         prompt: async () => apiKey,
@@ -400,6 +409,266 @@ export class PiAcpAgent implements AcpAgent {
         `persisting API key for ${provider} failed (${errorMessage(error)}); using it for this process only`,
       );
       await modelRuntime.setRuntimeApiKey(provider, apiKey);
+      this.runtimeKeys.add(provider);
+    }
+  }
+
+  private async runAuthenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
+    const modelRuntime = await this.modelRuntime();
+    if (params.methodId === TERMINAL_AUTH_METHOD_ID) {
+      // Terminal auth runs out of band; the spec forbids passing terminal methods
+      // to authenticate, so reject it instead of silently accepting (masks client bugs).
+      const launch = terminalLaunchSpec();
+      throw invalidParams(
+        `"${TERMINAL_AUTH_METHOD_ID}" is a terminal auth method — run \`${launch.command} ${launch.args.join(" ")}\` ` +
+          "(or the client's terminal-auth launch spec); ACP clients must not send it to authenticate",
+      );
+    }
+    if (params.methodId === GATEWAY_METHOD_ID) {
+      return this.gatewayAuthenticate(modelRuntime, params);
+    }
+    const submitted = apiKeyFromAuthenticate(params._meta);
+    const parsed = parseAuthMethodId(params.methodId);
+    const provider = submitted.provider ?? parsed?.provider;
+    if (provider === undefined) throw invalidParams(`unknown auth method: ${params.methodId}`);
+
+    if (parsed?.type === "oauth" && submitted.apiKey === undefined) {
+      await this.oauthLogin(modelRuntime, provider);
+      return this.authResult(modelRuntime, provider, "oauth");
+    }
+    if (submitted.apiKey === undefined) {
+      if (modelRuntime.hasConfiguredAuth(provider)) {
+        // Re-authenticate over an existing credential is a no-op; report what is active.
+        const kind = modelRuntime.isUsingOAuth(provider) ? "oauth" : "api_key";
+        return this.authResult(modelRuntime, provider, kind);
+      }
+      // Spec-compliant secret path: a loopback key-entry page behind a URL elicitation.
+      if (this.features.urlElicitation) {
+        await this.urlLogin(modelRuntime, provider);
+        return this.authResult(modelRuntime, provider, "api_key");
+      }
+      const launch = terminalLaunchSpec();
+      throw this.authError(
+        modelRuntime,
+        `authenticate ${params.methodId} needs the key another way: send ` +
+          `_meta["api-key"] = {"apiKey": "<key>"} (openma extension), use a client that supports ` +
+          `URL elicitation, or run \`${launch.command} ${launch.args.join(" ")}\` to log in`,
+      );
+    }
+    await this.storeApiKey(modelRuntime, provider, submitted.apiKey);
+    return this.authResult(modelRuntime, provider, "api_key");
+  }
+
+  /** `_meta.gateway` → a models.json provider entry, then refresh so pi serves it. */
+  private async gatewayAuthenticate(
+    modelRuntime: ModelRuntime,
+    params: AuthenticateRequest,
+  ): Promise<AuthenticateResponse> {
+    const parsed = gatewayFromAuthenticate(params._meta);
+    if (parsed === undefined) {
+      throw invalidParams(
+        `authenticate methodId "${GATEWAY_METHOD_ID}" requires ` +
+          '_meta.gateway = {"baseUrl": "https://…", "headers"?: {"Authorization": "Bearer <key>"}, "providerName"?: "…"}',
+      );
+    }
+    if ("error" in parsed) throw invalidParams(parsed.error);
+    const gw = parsed.submission;
+    const patch: Record<string, unknown> = {
+      baseUrl: gw.baseUrl,
+      api: gw.api ?? "openai-completions",
+      ...(gw.name !== undefined ? { name: gw.name } : {}),
+      ...(gw.apiKey !== undefined ? { apiKey: gw.apiKey } : {}),
+      ...(Object.keys(gw.headers).length > 0 ? { headers: gw.headers } : {}),
+      ...(gw.models !== undefined ? { models: gw.models } : {}),
+    };
+    this.writeModelsJsonProvider(gw.provider, patch);
+    await modelRuntime.refresh({ allowNetwork: false });
+    return this.authResult(modelRuntime, gw.provider, "gateway");
+  }
+
+  /** Merge `patch` into `providers[providerId]` in `<agentDir>/models.json`. */
+  private writeModelsJsonProvider(providerId: string, patch: Record<string, unknown>): void {
+    const path = join(this.agentDir, "models.json");
+    let doc: Record<string, unknown> = {};
+    if (existsSync(path)) {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(readFileSync(path, "utf8"));
+      } catch (error: unknown) {
+        throw internalError(`cannot parse ${path}: ${errorMessage(error)}`);
+      }
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        throw internalError(`${path} must contain a JSON object`);
+      }
+      doc = raw as Record<string, unknown>;
+    }
+    const providers =
+      typeof doc["providers"] === "object" && doc["providers"] !== null
+        ? { ...(doc["providers"] as Record<string, unknown>) }
+        : {};
+    const existing = providers[providerId];
+    providers[providerId] = {
+      ...(typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {}),
+      ...patch,
+    };
+    try {
+      mkdirSync(this.agentDir, { recursive: true });
+      writeFileSync(path, JSON.stringify({ ...doc, providers }, null, 2) + "\n");
+    } catch (error: unknown) {
+      throw internalError(`cannot write ${path}: ${errorMessage(error)}`);
+    }
+  }
+
+  /**
+   * Drop the provider's credential material from models.json (`apiKey` plus
+   * Authorization/x-api-key headers). Returns true when something was removed.
+   */
+  private scrubModelsJsonAuth(providerId: string): boolean {
+    const path = join(this.agentDir, "models.json");
+    if (!existsSync(path)) return false;
+    let doc: Record<string, unknown>;
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+      doc = raw as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    const providers = doc["providers"];
+    if (providers === null || typeof providers !== "object") return false;
+    const providerMap = providers as Record<string, unknown>;
+    const existing = providerMap[providerId];
+    if (existing === null || typeof existing !== "object") return false;
+    const next = { ...(existing as Record<string, unknown>) };
+    let removed = false;
+    if ("apiKey" in next) {
+      delete next["apiKey"];
+      removed = true;
+    }
+    const headers = next["headers"];
+    if (headers !== null && typeof headers === "object") {
+      const kept: Record<string, unknown> = {};
+      for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
+        const lower = name.toLowerCase();
+        if (lower === "authorization" || lower === "x-api-key") removed = true;
+        else kept[name] = value;
+      }
+      if (Object.keys(kept).length === 0) delete next["headers"];
+      else next["headers"] = kept;
+    }
+    if (!removed) return false;
+    if (Object.keys(next).length === 0) delete providerMap[providerId];
+    else providerMap[providerId] = next;
+    try {
+      writeFileSync(path, JSON.stringify(doc, null, 2) + "\n");
+    } catch (error: unknown) {
+      logWarn(`could not update ${path}: ${errorMessage(error)}`);
+      return false;
+    }
+    return true;
+  }
+
+  /** Provider ids whose credential can actually be removed (store, runtime, or models.json). */
+  private async removableProviders(modelRuntime: ModelRuntime): Promise<string[]> {
+    const removable = new Set<string>();
+    for (const credential of await modelRuntime.listCredentials()) {
+      removable.add(credential.providerId);
+    }
+    for (const provider of this.runtimeKeys) removable.add(provider);
+    const path = join(this.agentDir, "models.json");
+    if (existsSync(path)) {
+      try {
+        const doc = JSON.parse(readFileSync(path, "utf8")) as {
+          providers?: Record<string, { apiKey?: unknown; headers?: Record<string, unknown> }>;
+        };
+        for (const [id, config] of Object.entries(doc.providers ?? {})) {
+          if (
+            config !== null &&
+            typeof config === "object" &&
+            (config.apiKey !== undefined ||
+              Object.keys(config.headers ?? {}).some(
+                (name) => name.toLowerCase() === "authorization" || name.toLowerCase() === "x-api-key",
+              ))
+          ) {
+            removable.add(id);
+          }
+        }
+      } catch {
+        // unreadable models.json: just report the credential-store providers
+      }
+    }
+    return [...removable];
+  }
+
+  /**
+   * Which provider a bare `logout` targets: the configured model's provider
+   * (settings `--model`/settings.json `defaultProvider`), else the only
+   * provider with a removable credential.
+   */
+  private async defaultLogoutProvider(modelRuntime: ModelRuntime): Promise<string | undefined> {
+    const configured = this.settings.model?.split("/")[0] ?? this.settingsDefaultProvider();
+    if (configured !== undefined) return configured;
+    const removable = await this.removableProviders(modelRuntime);
+    return removable.length === 1 ? removable[0] : undefined;
+  }
+
+  private settingsDefaultProvider(): string | undefined {
+    try {
+      return SettingsManager.create(process.cwd(), this.agentDir).getDefaultProvider();
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Remove one provider's credential everywhere it can live. */
+  private async logoutProvider(modelRuntime: ModelRuntime, provider: string): Promise<boolean> {
+    let removed = false;
+    const stored = await modelRuntime.listCredentials();
+    if (stored.some((credential) => credential.providerId === provider)) {
+      try {
+        await modelRuntime.logout(provider);
+        removed = true;
+      } catch (error: unknown) {
+        logWarn(`logout ${provider} failed: ${errorMessage(error)}`);
+      }
+    }
+    if (this.runtimeKeys.delete(provider)) {
+      try {
+        await modelRuntime.removeRuntimeApiKey(provider);
+      } catch (error: unknown) {
+        logWarn(`removing runtime key for ${provider} failed: ${errorMessage(error)}`);
+      }
+      removed = true;
+    }
+    if (this.scrubModelsJsonAuth(provider)) removed = true;
+    return removed;
+  }
+
+  /** API-key entry through a loopback page opened by a URL elicitation. */
+  private async urlLogin(modelRuntime: ModelRuntime, provider: string): Promise<void> {
+    const requestId = this.requestIds?.latestFor("authenticate");
+    if (requestId === undefined) {
+      throw internalError("URL login needs the authenticate request id (request tracking is not wired)");
+    }
+    const providerName = modelRuntime.getProvider(provider)?.name ?? provider;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AUTH_FLOW_TIMEOUT_MS);
+    try {
+      const apiKey = await captureApiKeyViaUrl({
+        conn: this.conn,
+        requestId,
+        provider: providerName,
+        signal: controller.signal,
+      });
+      await this.storeApiKey(modelRuntime, provider, apiKey);
+    } catch (error: unknown) {
+      if (error instanceof AuthFlowCancelled || controller.signal.aborted) {
+        throw this.authError(modelRuntime, `login with ${providerName} was cancelled`);
+      }
+      throw this.authError(modelRuntime, `login with ${providerName} failed: ${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
     }
   }
 
@@ -411,7 +680,7 @@ export class PiAcpAgent implements AcpAgent {
     if (requestId === undefined)
       throw internalError("OAuth login needs the authenticate request id (request tracking is not wired)");
     if (!this.features.urlElicitation && !this.features.formElicitation)
-      throw authRequired("OAuth login needs a client that supports URL or form elicitation");
+      throw this.authError(modelRuntime, "OAuth login needs a client that supports URL or form elicitation");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AUTH_FLOW_TIMEOUT_MS);
     const interaction = createAcpAuthInteraction({
@@ -426,9 +695,9 @@ export class PiAcpAgent implements AcpAgent {
       await modelRuntime.login(provider, "oauth", interaction);
     } catch (error: unknown) {
       if (error instanceof AuthFlowCancelled || controller.signal.aborted) {
-        throw authRequired(`login with ${provider} was cancelled`);
+        throw this.authError(modelRuntime, `login with ${provider} was cancelled`);
       }
-      throw authRequired(`login with ${provider} failed: ${errorMessage(error)}`);
+      throw this.authError(modelRuntime, `login with ${provider} failed: ${errorMessage(error)}`);
     } finally {
       clearTimeout(timer);
       controller.abort();
@@ -437,17 +706,40 @@ export class PiAcpAgent implements AcpAgent {
     await modelRuntime.refresh({ allowNetwork: false });
   }
 
-  async logout(_params: LogoutRequest): Promise<void> {
-    const modelRuntime = await this.modelRuntime();
-    const credentials = await modelRuntime.listCredentials();
-    for (const credential of credentials) {
-      try {
-        await modelRuntime.logout(credential.providerId);
-      } catch (error: unknown) {
-        logWarn(`logout ${credential.providerId} failed: ${errorMessage(error)}`);
-      }
+  async logout(params: LogoutRequest): Promise<LogoutResponse> {
+    try {
+      return await this.runLogout(params);
+    } finally {
+      void this.publishAuthStatus();
     }
-    void this.publishAuthStatus();
+  }
+
+  private async runLogout(params: LogoutRequest): Promise<LogoutResponse> {
+    const modelRuntime = await this.modelRuntime();
+    const scope = logoutScopeFromMeta(params._meta);
+    let targets: string[];
+    if (scope.all === true) {
+      targets = await this.removableProviders(modelRuntime);
+    } else {
+      const provider = scope.provider ?? (await this.defaultLogoutProvider(modelRuntime));
+      if (provider === undefined) {
+        const removable = await this.removableProviders(modelRuntime);
+        throw invalidParams(
+          `logout needs a scope — pass _meta.pi.logout = {"provider": "<id>"} ` +
+            (removable.length > 0 ? `(signed in: ${removable.join(", ")}) ` : "") +
+            `or {"all": true} to sign out of every provider`,
+        );
+      }
+      targets = [provider];
+    }
+    const cleared: string[] = [];
+    for (const provider of targets) {
+      if (await this.logoutProvider(modelRuntime, provider)) cleared.push(provider);
+    }
+    await modelRuntime.refresh({ allowNetwork: false });
+    return {
+      _meta: piMeta({ logout: { cleared }, authStatus: computeAuthStatus(modelRuntime) }),
+    };
   }
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
@@ -654,9 +946,20 @@ export class PiAcpAgent implements AcpAgent {
     if (converted.text.trim().length === 0 && converted.images.length === 0)
       throw invalidParams("empty prompt");
 
-    // Adapter built-ins never reach the model; pi handles its own slash commands
-    // (extension commands, prompt templates, /skill:name) inside `prompt()`.
+    // pi's native auth commands (/login, /logout) are never advertised and
+    // never reach the model: the turn ends with auth_required + data.authMethods
+    // so the client shows its auth UI. Adapter built-ins likewise never reach
+    // the model; pi handles its other slash commands inside `prompt()`.
     const slash = converted.images.length === 0 ? parseSlashCommand(converted.text) : undefined;
+    if (slash !== undefined && isNativeAuthCommand(slash.name)) {
+      const modelRuntime = await this.modelRuntime();
+      throw this.authError(
+        modelRuntime,
+        `"/${slash.name}" is a pi terminal command with no effect over ACP — ` +
+          "authenticate and sign out through the ACP authenticate/logout methods " +
+          "(see data.authMethods); credentials are unchanged",
+      );
+    }
     if (slash !== undefined && isBuiltinCommand(slash.name)) {
       if (session.isRunning && !["status", "queue", "session"].includes(slash.name)) {
         session.text(`⚠ /${slash.name} is unavailable while a turn is running.`);
@@ -680,9 +983,25 @@ export class PiAcpAgent implements AcpAgent {
     }
 
     if (!session.isRunning) await this.requireModel(session);
-    const stopReason = await session.prompt(converted.text, converted.images);
+    let stopReason;
+    try {
+      stopReason = await session.prompt(converted.text, converted.images);
+    } catch (error: unknown) {
+      throw await this.enrichAuthError(error);
+    }
     const usage = session.projection.promptUsage();
     return { stopReason, ...(usage !== undefined ? { usage } : {}) };
+  }
+
+  /** Every auth-related -32000 carries data.authMethods — attach it when pi's didn't. */
+  private async enrichAuthError(error: unknown): Promise<unknown> {
+    const e = error as { code?: unknown; data?: unknown };
+    if (e.code !== RequestError.authRequired().code) return error;
+    const modelRuntime = await this.modelRuntime();
+    return authRequired((error as Error).message, {
+      ...(e.data as Record<string, unknown> | undefined),
+      authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()),
+    });
   }
 
   async cancel(params: CancelNotification): Promise<void> {

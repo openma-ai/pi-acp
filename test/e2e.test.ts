@@ -34,7 +34,7 @@ describe("initialize", () => {
     });
     expect(response._meta).toMatchObject({ steering: { supported: true } });
     const ids = (response.authMethods ?? []).map((m) => m.id);
-    expect(ids).toContain("pi-terminal-login");
+    expect(ids).not.toContain("pi-terminal-login");
     expect(ids).toContain("api-key:faux");
   });
 });
