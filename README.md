@@ -1,4 +1,4 @@
-<h1 align="center">openma-pi-acp</h1>
+<h1 align="center">pi-acp</h1>
 
 <p align="center">
   Use the <a href="https://github.com/earendil-works/pi">pi coding agent</a> from
