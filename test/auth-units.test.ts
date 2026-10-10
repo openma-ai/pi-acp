@@ -4,11 +4,7 @@
  * reach through the harness.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   apiKeyFromAuthenticate,
   buildAuthMethods,
@@ -19,94 +15,34 @@ import {
 } from "../src/acp/auth.ts";
 import { isNativeAuthCommand } from "../src/acp/commands.ts";
 
-const dirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-/** Create a fake package tree; returns the package root. */
-function fixture(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), "pi-acp-auth-"));
-  dirs.push(root);
-  for (const [name, content] of Object.entries(files)) {
-    const path = join(root, name);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content);
-  }
-  return root;
-}
-
 describe("terminalLaunchSpec", () => {
-  it("reruns the entry script under node (node + dist/bin.js)", () => {
-    expect(terminalLaunchSpec(["/usr/bin/node", "/app/dist/bin.js"], "file:///nope", "/x/node")).toEqual({
-      command: "/x/node",
-      args: ["/app/dist/bin.js", "--terminal-login"],
+  it("advertises the package bin name with only the login flag", () => {
+    // The `_meta["terminal-auth"]` convention (claude-agent-acp, dsh-acp):
+    // `command` is the bin name and `args` carry only flags — spec clients
+    // append `args` to the argv they spawned the agent with, so a script
+    // path here would arrive as a stray positional arg and exit the login
+    // process on resolveSettings's unknown-option error.
+    expect(terminalLaunchSpec()).toEqual({
+      command: "openma-pi-acp",
+      args: ["--terminal-login"],
     });
   });
 
-  it("accepts .mjs/.cjs/.ts entry scripts", () => {
-    for (const name of ["x.mjs", "x.cjs", "x.ts"]) {
-      expect(terminalLaunchSpec(["node", `/a/${name}`], "file:///nope", "/x/node").args).toEqual([
-        `/a/${name}`,
-        "--terminal-login",
-      ]);
-    }
-  });
-
-  it("resolves the packaged bin when argv[1] has no script extension", () => {
-    const root = fixture({
-      "package.json": JSON.stringify({
-        name: "@openma/pi-acp",
-        bin: { "openma-pi-acp": "dist/bin.js" },
-      }),
-      "dist/bin.js": "// bin",
-      "dist/chunk.js": "// mod",
+  it("matches the spec-level args/env of the advertised terminal method", () => {
+    const spec = terminalLaunchSpec();
+    const [method] = buildAuthMethods(undefined, {
+      terminal: false,
+      gateway: false,
+      terminalAuthMeta: true,
+      urlElicitation: false,
+      formElicitation: false,
     });
-    const spec = terminalLaunchSpec(
-      ["weird-launcher", "/opt/bin/openma-pi-acp"],
-      pathToFileURL(join(root, "dist/chunk.js")).href,
-      "/x/node",
-    );
-    expect(spec).toEqual({ command: "/x/node", args: [join(root, "dist/bin.js"), "--terminal-login"] });
-  });
-
-  it("falls back to the bin name when the package cannot be resolved", () => {
-    const spec = terminalLaunchSpec(["weird", "/opt/bin/tool"], "file:///nothing/here.js", "/x/node");
-    expect(spec).toEqual({ command: "openma-pi-acp", args: ["--terminal-login"] });
-  });
-
-  it("stops at the nearest package.json even when it is another package", () => {
-    const root = fixture({ "package.json": JSON.stringify({ name: "other", bin: {} }) });
-    const spec = terminalLaunchSpec(
-      ["weird", "/opt/bin/tool"],
-      pathToFileURL(join(root, "x.js")).href,
-      "/x/node",
-    );
-    expect(spec.command).toBe("openma-pi-acp");
-  });
-
-  it("falls back on malformed package.json, missing bin entry, missing bin file, bad module url", () => {
-    const malformed = fixture({ "package.json": "{oops" });
-    for (const url of [
-      pathToFileURL(join(malformed, "x.js")).href,
-      (() => {
-        const noBin = fixture({ "package.json": JSON.stringify({ name: "@openma/pi-acp", bin: {} }) });
-        return pathToFileURL(join(noBin, "x.js")).href;
-      })(),
-      (() => {
-        const missing = fixture({
-          "package.json": JSON.stringify({
-            name: "@openma/pi-acp",
-            bin: { "openma-pi-acp": "dist/bin.js" },
-          }),
-        });
-        return pathToFileURL(join(missing, "x.js")).href;
-      })(),
-      "not-a-file-url",
-    ]) {
-      expect(terminalLaunchSpec(["weird", "/opt/bin/tool"], url, "/x/node").command).toBe("openma-pi-acp");
-    }
+    expect(method).toMatchObject({ type: "terminal", args: spec.args, env: {} });
+    expect(method?._meta?.["terminal-auth"]).toMatchObject({
+      command: spec.command,
+      args: spec.args,
+      label: "Log in with pi",
+    });
   });
 });
 
@@ -162,14 +98,7 @@ describe("gatewayFromAuthenticate", () => {
     });
   });
 
-  it("falls back when bin is a string, and yields no key for a blank Authorization header", () => {
-    const root = fixture({
-      "package.json": JSON.stringify({ name: "@openma/pi-acp", bin: "cli.js" }),
-    });
-    expect(terminalLaunchSpec([], `file://${root}/dist/bin.js`)).toEqual({
-      command: "openma-pi-acp",
-      args: ["--terminal-login"],
-    });
+  it("yields no key for a blank Authorization header", () => {
     const parsed = gatewayFromAuthenticate({
       gateway: { baseUrl, headers: { Authorization: "   " } },
     });

@@ -47,7 +47,8 @@ describe("advertised auth methods", () => {
     const launch = (meta.authMethods ?? []).find((m) => m.id === "pi-terminal-login")?._meta;
     expect(launch).toMatchObject({
       "terminal-auth": {
-        args: expect.arrayContaining(["--terminal-login"]),
+        command: "openma-pi-acp",
+        args: ["--terminal-login"],
         label: expect.any(String),
       },
     });

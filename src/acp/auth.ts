@@ -21,10 +21,7 @@
 
 import type { AuthMethod } from "@agentclientprotocol/sdk";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { AGENT_NAME, PACKAGE_NAME } from "../version.ts";
+import { AGENT_NAME } from "../version.ts";
 import { piMeta } from "./meta.ts";
 
 export const TERMINAL_AUTH_METHOD_ID = "pi-terminal-login";
@@ -33,56 +30,19 @@ export const OAUTH_METHOD_PREFIX = "oauth:";
 export const GATEWAY_METHOD_ID = "gateway";
 
 /**
- * How the client should spawn the adapter for the terminal auth method. Under
- * `node dist/bin.js` (npx, global bin shim, plain node) argv[1] is the entry
- * script; for anything else (renamed shims, bundlers) resolve this package's
- * own bin file so the spec never depends on a global `openma-pi-acp` on PATH.
+ * How the client launches the adapter for the terminal auth method, following
+ * the `_meta["terminal-auth"]` convention shared by claude-agent-acp and
+ * dsh-acp: `command` is this package's bin name and `args` carry only flags.
+ * Spec-compliant clients append `args` to the argv they spawned the agent
+ * with — the client knows whether that was `npx`, a global bin shim, or
+ * `node dist/bin.js`, so the same `args` work under every launcher. Clients
+ * that exec `command` + `args` literally get `openma-pi-acp --terminal-login`.
+ * `args` must never embed a script path or executable: a client that prepends
+ * its own agent argv would turn it into a stray positional arg, and the login
+ * process would exit on `resolveSettings`'s unknown-option error.
  */
-export function terminalLaunchSpec(
-  argv: readonly string[] = process.argv,
-  moduleUrl: string = import.meta.url,
-  execPath: string = process.execPath,
-): { command: string; args: string[] } {
-  const argv1 = argv[1];
-  if (argv1 !== undefined && /\.(m?js|cjs|ts)$/.test(argv1)) {
-    return { command: execPath, args: [argv1, "--terminal-login"] };
-  }
-  const packaged = packagedBin(moduleUrl);
-  if (packaged !== undefined) return { command: execPath, args: [packaged, "--terminal-login"] };
+export function terminalLaunchSpec(): { command: string; args: string[] } {
   return { command: AGENT_NAME, args: ["--terminal-login"] };
-}
-
-/** This package's bin file, found by walking up from the module to its package.json. */
-function packagedBin(moduleUrl: string): string | undefined {
-  let dir: string;
-  try {
-    dir = dirname(fileURLToPath(moduleUrl));
-  } catch {
-    return undefined;
-  }
-  for (let i = 0; i < 6; i += 1) {
-    const manifest = join(dir, "package.json");
-    if (existsSync(manifest)) {
-      try {
-        const pkg = JSON.parse(readFileSync(manifest, "utf8")) as {
-          name?: unknown;
-          bin?: unknown;
-        };
-        if (pkg.name !== PACKAGE_NAME) return undefined;
-        const entry =
-          typeof pkg.bin === "object" && pkg.bin !== null
-            ? (pkg.bin as Record<string, unknown>)[AGENT_NAME]
-            : undefined;
-        if (typeof entry !== "string") return undefined;
-        const bin = join(dir, entry);
-        return existsSync(bin) ? bin : undefined;
-      } catch {
-        return undefined;
-      }
-    }
-    dir = dirname(dir);
-  }
-  return undefined;
 }
 
 /** Providers whose API-key method is advertised even before any credential exists. */

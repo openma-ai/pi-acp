@@ -157,10 +157,13 @@ is merged into `models.json` under `providers` and the runtime refreshes.
 
 `authenticate` on `pi-terminal-login` is rejected `-32602`: terminal methods run
 out of band, so a client must never send them. The launch spec in
-`_meta["terminal-auth"]` re-runs the entry script under `process.execPath` when
-`argv[1]` is a `.js/.ts` file (npx/direct invocation), resolves the package's own
-`bin` name from its `package.json` (global install), else falls back to the
-package bin name — it never hardcodes a launcher.
+`_meta["terminal-auth"]` follows the claude-agent-acp / dsh-acp convention:
+`{command: "openma-pi-acp", args: ["--terminal-login"], label}` — `command` is
+this package's bin name and `args` carry only flags. Spec-compliant clients
+append `args` to the argv they spawned the agent with, so the same spec works
+under `npx`, a global bin shim, or `node dist/bin.js`; `args` never embeds a
+script path (a client that prepends its own argv would turn it into a stray
+positional arg).
 
 Every authentication failure (`session/new`, `session/prompt`, `authenticate`)
 returns `-32000` whose `data.authMethods` lists the methods the client can act
