@@ -601,11 +601,15 @@ export class PiAcpAgent implements AcpAgent {
   }
 
   /**
-   * Which provider a bare `logout` targets: the configured model's provider
-   * (settings `--model`/settings.json `defaultProvider`), else the only
-   * provider with a removable credential.
+   * Which provider a bare `logout` targets: the running session's model
+   * provider — that is the credential in use — else the configured model's
+   * provider (settings `--model`/settings.json `defaultProvider`), else the
+   * only provider with a removable credential.
    */
   private async defaultLogoutProvider(modelRuntime: ModelRuntime): Promise<string | undefined> {
+    const live = [...this.sessions.values()];
+    const sessionProvider = live[live.length - 1]?.session.model?.provider;
+    if (sessionProvider !== undefined) return sessionProvider;
     const configured = this.settings.model?.split("/")[0] ?? this.settingsDefaultProvider();
     if (configured !== undefined) return configured;
     const removable = await this.removableProviders(modelRuntime);
