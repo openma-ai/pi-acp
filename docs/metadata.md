@@ -168,8 +168,12 @@ positional arg).
 Every authentication failure (`session/new`, `session/prompt`, `authenticate`)
 returns `-32000` whose `data.authMethods` lists the methods the client can act
 on. Typing pi's `/login`, `/logout`, or another native auth command in a prompt
-ends the turn the same way — the text never reaches the model and credentials
-are unchanged.
+instead ends the turn with one `agent_message_chunk` — `"/login" isn't
+available over ACP — sign in through the client's authentication (ACP auth
+methods); credentials are unchanged.` (the `/logout` variant points at ACP
+`logout`) — plus `stopReason: "end_turn"` (claude-agent-acp semantics:
+`auth_required` is reserved for genuinely unauthenticated turns). The text
+never reaches the model or pi's native command, and credentials are unchanged.
 
 `authenticate` and `logout` results report the active account:
 

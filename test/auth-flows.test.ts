@@ -85,17 +85,35 @@ describe("typed auth commands", () => {
         : [],
     ).not.toEqual(expect.arrayContaining(["login", "logout"]));
 
+    // Typed native auth commands get a plain "not available here" agent message
+    // and end_turn — never the model, never auth_required (claude-agent-acp).
     for (const text of ["/login", "/logout", "/login anthropic"]) {
       harness.respond(fauxAssistantMessage("must not be used"));
-      await expect(
-        harness.client.prompt({ sessionId, prompt: [{ type: "text", text }] }),
-      ).rejects.toMatchObject({
-        code: AUTH_REQUIRED,
-        data: { authMethods: expect.arrayContaining([expect.objectContaining({ id: "api-key:faux" })]) },
+      const response = await harness.client.prompt({
+        sessionId,
+        prompt: [{ type: "text", text }],
       });
+      expect(response.stopReason).toBe("end_turn");
     }
-    // Three typed commands, zero model calls.
+    // Three typed commands, zero model calls, one message per turn.
     expect(harness.faux.state.callCount).toBe(0);
+    const chunks = harness
+      .updatesFor(sessionId)
+      .filter((u) => u.sessionUpdate === "agent_message_chunk" && u.content.type === "text");
+    expect(chunks).toHaveLength(3);
+    expect(harness.text(sessionId)).toContain('"/login" isn\'t available over ACP');
+    expect(harness.text(sessionId)).toContain('"/logout" isn\'t available over ACP');
+    expect(harness.text(sessionId)).toContain("sign in through the client's authentication");
+    expect(harness.text(sessionId)).toContain("sign out through the client's logout");
+    expect(harness.text(sessionId)).toContain("credentials are unchanged");
+    // The session keeps working afterwards.
+    harness.respond(fauxAssistantMessage("still here"));
+    const reply = await harness.client.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "hi" }],
+    });
+    expect(reply.stopReason).toBe("end_turn");
+    expect(harness.faux.state.callCount).toBe(1);
   });
 
   it("does not parse-slash when the prompt carries an image", async () => {

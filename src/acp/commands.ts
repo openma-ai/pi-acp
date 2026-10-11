@@ -77,8 +77,9 @@ export function isBuiltinCommand(name: string): boolean {
 
 /**
  * pi's own auth commands. They are never advertised (not in BUILTIN_COMMANDS)
- * and never reach the model — a prompt for one ends the turn with
- * auth_required + data.authMethods so the client shows its auth UI instead.
+ * and never reach the model or pi's native command — a prompt for one gets a
+ * plain "isn't available over ACP" agent message and ends the turn with
+ * `end_turn`, credentials untouched (claude-agent-acp semantics).
  */
 const NATIVE_AUTH_COMMANDS = new Set(["login", "logout"]);
 

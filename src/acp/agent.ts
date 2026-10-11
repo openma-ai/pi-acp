@@ -946,19 +946,22 @@ export class PiAcpAgent implements AcpAgent {
     if (converted.text.trim().length === 0 && converted.images.length === 0)
       throw invalidParams("empty prompt");
 
-    // pi's native auth commands (/login, /logout) are never advertised and
-    // never reach the model: the turn ends with auth_required + data.authMethods
-    // so the client shows its auth UI. Adapter built-ins likewise never reach
-    // the model; pi handles its other slash commands inside `prompt()`.
+    // pi's native auth commands (/login, /logout) are never advertised, never
+    // reach the model or pi's native command, and never touch credentials:
+    // the turn gets one agent message pointing at the client's own auth UI and
+    // ends (claude-agent-acp sends "<cmd> isn't available in this environment"
+    // + end_turn; auth_required is only for genuinely unauthenticated turns).
+    // Adapter built-ins likewise never reach the model; pi handles its other
+    // slash commands inside `prompt()`.
     const slash = converted.images.length === 0 ? parseSlashCommand(converted.text) : undefined;
     if (slash !== undefined && isNativeAuthCommand(slash.name)) {
-      const modelRuntime = await this.modelRuntime();
-      throw this.authError(
-        modelRuntime,
-        `"/${slash.name}" is a pi terminal command with no effect over ACP — ` +
-          "authenticate and sign out through the ACP authenticate/logout methods " +
-          "(see data.authMethods); credentials are unchanged",
-      );
+      const directive =
+        slash.name === "login"
+          ? "sign in through the client's authentication (ACP auth methods)"
+          : "sign out through the client's logout (ACP `logout`)";
+      session.text(`"/${slash.name}" isn't available over ACP — ${directive}; credentials are unchanged.`);
+      await session.flush();
+      return { stopReason: "end_turn" };
     }
     if (slash !== undefined && isBuiltinCommand(slash.name)) {
       if (session.isRunning && !["status", "queue", "session"].includes(slash.name)) {
