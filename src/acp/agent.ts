@@ -66,7 +66,7 @@ import {
   parseBooleanOptionValue,
 } from "./config-options.ts";
 import { delegationFromClient } from "./delegation.ts";
-import { authRequired, internalError, invalidParams } from "./errors.ts";
+import { authRequired, internalError, invalidParams, looksLikeAuthError } from "./errors.ts";
 import { acpInclusiveForkCapabilityMeta, mergeCapabilityMeta } from "./fork-capability.ts";
 import { forkInclusiveSession, forkPointNotFoundMessage, parseJetbrainsAirFork } from "./fork-point.ts";
 import { piMeta, readPiMeta } from "./meta.ts";
@@ -996,13 +996,22 @@ export class PiAcpAgent implements AcpAgent {
     return { stopReason, ...(usage !== undefined ? { usage } : {}) };
   }
 
-  /** Every auth-related -32000 carries data.authMethods — attach it when pi's didn't. */
+  /** Every auth-related -32000 carries data.authMethods — attach it when pi's
+   *  didn't; a provider failure that merely *looks* like auth (mid-turn
+   *  rejection, accepted prompts) is upgraded to -32000 the same way so the
+   *  client can open its auth UI (openma-ai/Martty#160). */
   private async enrichAuthError(error: unknown): Promise<unknown> {
     const e = error as { code?: unknown; data?: unknown };
-    if (e.code !== RequestError.authRequired().code) return error;
+    if (e.code === RequestError.authRequired().code) {
+      const modelRuntime = await this.modelRuntime();
+      return authRequired((error as Error).message, {
+        ...(e.data as Record<string, unknown> | undefined),
+        authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()),
+      });
+    }
+    if (!looksLikeAuthError(error)) return error;
     const modelRuntime = await this.modelRuntime();
-    return authRequired((error as Error).message, {
-      ...(e.data as Record<string, unknown> | undefined),
+    return authRequired(errorMessage(error), {
       authMethods: buildAuthMethods(modelRuntime, this.authMethodOptions()),
     });
   }
