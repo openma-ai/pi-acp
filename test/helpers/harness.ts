@@ -60,6 +60,8 @@ export interface HarnessOptions {
   providers?: Provider[];
   /** Faux token rate. Set it when a test must observe a chunk before the turn ends. */
   tokensPerSecond?: number;
+  /** Skip RequestIdTracker wiring (exercises the no-request-id auth error path). */
+  wireRequestIds?: boolean;
 }
 
 export class Harness {
@@ -79,9 +81,14 @@ export class Harness {
   private agentConn!: AgentSideConnection;
   private readonly options: HarnessOptions;
 
-  private constructor(options: HarnessOptions, faux: FauxProviderHandle, modelRuntime: ModelRuntime) {
+  private constructor(
+    options: HarnessOptions,
+    faux: FauxProviderHandle,
+    modelRuntime: ModelRuntime,
+    root: string,
+  ) {
     this.options = options;
-    this.root = mkdtempSync(join(tmpdir(), "openma-pi-acp-"));
+    this.root = root;
     this.agentDir = join(this.root, "agent");
     this.workspace = join(this.root, "work");
     this.sessionDir = join(this.root, "sessions");
@@ -105,15 +112,16 @@ export class Harness {
       ],
       ...(options.tokensPerSecond !== undefined ? { tokensPerSecond: options.tokensPerSecond } : {}),
     });
+    const root = mkdtempSync(join(tmpdir(), "openma-pi-acp-"));
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
-      modelsPath: null,
+      modelsPath: join(root, "agent", "models.json"),
       refreshOnCreate: true,
     });
     modelRuntime.registerNativeProvider(faux.provider);
     for (const provider of options.providers ?? []) modelRuntime.registerNativeProvider(provider);
     await modelRuntime.refresh({ allowNetwork: false });
-    const harness = new Harness(options, faux, modelRuntime);
+    const harness = new Harness(options, faux, modelRuntime, root);
     harness.connect();
     return harness;
   }
@@ -131,7 +139,11 @@ export class Harness {
     const requestIds = new RequestIdTracker();
     this.agentConn = new AgentSideConnection(
       (conn) => {
-        this.agent = new PiAcpAgent(conn, { settings, modelRuntime: this.modelRuntime, requestIds });
+        this.agent = new PiAcpAgent(conn, {
+          settings,
+          modelRuntime: this.modelRuntime,
+          requestIds: this.options.wireRequestIds === false ? undefined : requestIds,
+        });
         return this.agent;
       },
       tapRequestIds(agentStream, requestIds),
