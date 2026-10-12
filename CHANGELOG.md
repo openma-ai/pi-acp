@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.8-beta.0 — 2026-10-12
+
+- ACP auth goes only through `authenticate`/`logout`, never the model (#10).
+  Typed `/login` and `/logout` get one notice and end the turn with
+  `end_turn`; credentials are unchanged. `authenticate` routes `api-key:<provider>`
+  (with a loopback url-elicitation key page when no key is sent),
+  `oauth:<provider>`, and `gateway`, gated by client capabilities.
+  `--terminal-login` runs an in-process login; the `_meta["terminal-auth"]`
+  launch spec is `{command: "openma-pi-acp", args: ["--terminal-login"]}`.
+  `logout` is scoped to the active provider unless `{all: true}`. Auth errors
+  carry `data.authMethods`.
+
 ## 0.1.7 — 2026-10-09
 
 - Require the pi 1.1.0 SDK (`@earendil-works/pi-coding-agent`, `pi-ai`, and
