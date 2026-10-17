@@ -217,3 +217,13 @@ function commitAll(cwd: string, message: string) {
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "ignore" });
 }
+
+describe("classifyBump", () => {
+  it("treats promoting a prerelease to its stable version as a patch", async () => {
+    const mod = (await import(script)) as {
+      classifyBump: (from: string, to: string) => { kind: string };
+    };
+    expect(mod.classifyBump("0.1.8-beta.0", "0.1.8")).toEqual({ kind: "patch" });
+    expect(mod.classifyBump("0.1.8-beta.0", "0.1.9").kind).toBe("invalid");
+  });
+});

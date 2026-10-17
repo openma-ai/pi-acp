@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8 — 2026-10-17
+
+Stable release of 0.1.8-beta.0.
+
 ## 0.1.8-beta.0 — 2026-10-12
 
 - ACP auth goes only through `authenticate`/`logout`, never the model (#10).
