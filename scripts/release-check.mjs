@@ -178,6 +178,9 @@ function readChangelog(cwd, report) {
 }
 
 export function classifyBump(from, to) {
+  // Promoting a prerelease to its stable version (1.2.3-beta.0 -> 1.2.3) is a patch.
+  const promoted = /^(\d+\.\d+\.\d+)-[0-9A-Za-z.-]+$/.exec(from);
+  if (promoted && promoted[1] === to) return { kind: "patch" };
   const previous = parseVersion(from);
   const next = parseVersion(to);
   if (!previous || !next) {
