@@ -35,7 +35,8 @@ The initialize response carries:
     "sessionCapabilities": { "fork": {} },
     "_meta": {
       "pi": {
-        "version": "0.1.0",
+        "version": "0.1.9",
+        "piVersion": "1.5.2",
         "delegation": { "readTextFile": false, "writeTextFile": false, "terminal": false }
       },
       "authStatus": {},
@@ -44,6 +45,12 @@ The initialize response carries:
   }
 }
 ```
+
+`version` is the adapter version (`@openma/pi-acp`). `piVersion` is the version
+of the Pi installation the adapter loaded — the Pi the user installed, not a
+copy the adapter resolved for itself. The adapter refuses to start when no Pi
+installation is found or when its version is outside the supported range, so
+the reported `piVersion` is always a supported one.
 
 `delegation` reports which client capabilities the adapter actually wired
 (`--no-delegation` forces all three to `false`).

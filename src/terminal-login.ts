@@ -6,8 +6,9 @@
  * credential store the ACP server uses.
  */
 
-import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
+import { piSdk } from "./pi/api.ts";
 import { createInterface, type Interface } from "node:readline";
 import { errorMessage } from "./log.ts";
 import { HELP_TEXT, resolveSettings, SettingsError } from "./settings.ts";
@@ -210,10 +211,10 @@ export async function terminalLogin(argv: string[]): Promise<number> {
     }
     throw error;
   }
-  const agentDir = settings.agentDir ?? getAgentDir();
+  const agentDir = settings.agentDir ?? piSdk.getAgentDir();
   let modelRuntime: ModelRuntime;
   try {
-    modelRuntime = await ModelRuntime.create({
+    modelRuntime = await piSdk.ModelRuntime.create({
       authPath: `${agentDir}/auth.json`,
       modelsPath: `${agentDir}/models.json`,
       signal: AbortSignal.timeout(30_000),

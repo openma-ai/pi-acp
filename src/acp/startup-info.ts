@@ -2,12 +2,13 @@
  * Startup banner for new sessions (mirrors pi's interactive prelude).
  */
 
-import { VERSION as PI_VERSION, type AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { piInstallation } from "../pi/api.ts";
 import { VERSION } from "../version.ts";
 
 export function buildStartupInfo(session: AgentSession, diagnostics: readonly string[]): string {
   const loader = session.resourceLoader;
-  const lines: string[] = [`**pi v${PI_VERSION}** via openma-pi-acp v${VERSION}`, ""];
+  const lines: string[] = [`**pi v${piInstallation().version}** via openma-pi-acp v${VERSION}`, ""];
   const section = (title: string, items: string[]): void => {
     if (items.length === 0) return;
     lines.push(`**${title}**`);
