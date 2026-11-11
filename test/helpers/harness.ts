@@ -33,6 +33,7 @@ import { join } from "node:path";
 import { PiAcpAgent } from "../../src/acp/agent.ts";
 import { RequestIdTracker, tapRequestIds } from "../../src/acp/request-ids.ts";
 import { resolveSettings, type Settings } from "../../src/settings.ts";
+import { ensurePiSdk } from "./pi.ts";
 
 export { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall };
 
@@ -104,6 +105,7 @@ export class Harness {
   }
 
   static async create(options: HarnessOptions = {}): Promise<Harness> {
+    await ensurePiSdk();
     const faux = fauxProvider({
       provider: "faux",
       models: [

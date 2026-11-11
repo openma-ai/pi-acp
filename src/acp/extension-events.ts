@@ -18,7 +18,8 @@
  * semantics.
  */
 
-import { createEventBus, type EventBus, type EventBusController } from "@earendil-works/pi-coding-agent";
+import type { EventBus, EventBusController } from "@earendil-works/pi-coding-agent";
+import { piSdk } from "../pi/api.ts";
 
 export type InferredPhase =
   "started" | "update" | "completed" | "failed" | "cancelled" | "request" | "response";
@@ -182,7 +183,7 @@ export interface TappedEventBus extends EventBusController {
  * The observer must not throw; failures are swallowed so extensions never see them.
  */
 export function createTappedEventBus(observe: (channel: string, data: unknown) => void): TappedEventBus {
-  const inner: EventBusController = createEventBus();
+  const inner: EventBusController = piSdk.createEventBus();
   return {
     emit(channel, data) {
       try {

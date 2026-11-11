@@ -13,25 +13,19 @@ import type {
   SessionConfigOption,
   StopReason,
 } from "@agentclientprotocol/sdk";
-import {
+import type {
+  AgentSession,
+  AgentSessionEvent,
   AgentSessionRuntime,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  hasTrustRequiringProjectResources,
-  ProjectTrustStore,
+  CreateAgentSessionRuntimeFactory,
+  ModelRuntime,
   SessionManager,
-  SettingsManager,
-  type AgentSession,
-  type AgentSessionEvent,
-  type CreateAgentSessionRuntimeFactory,
-  type ModelRuntime,
-  type ToolDefinition,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { readFileSync } from "node:fs";
 import { errorMessage, logDebug, logWarn } from "../log.ts";
+import { piSdk } from "../pi/api.ts";
 import type { Settings } from "../settings.ts";
 import { availableCommandsFor } from "./commands.ts";
 import { buildConfigOptions, findModel, modelValue } from "./config-options.ts";
@@ -242,16 +236,16 @@ export class PiAcpSession {
 
   private async boot(options: SessionOpenOptions): Promise<void> {
     const { settings, modelRuntime } = options;
-    const agentDir = settings.agentDir ?? getAgentDir();
+    const agentDir = settings.agentDir ?? piSdk.getAgentDir();
     const sessionDir = settings.sessionDir;
 
     let sessionManager: SessionManager;
     if (options.sessionFile !== undefined && options.fork === true) {
-      sessionManager = SessionManager.forkFrom(options.sessionFile, this.cwd, sessionDir);
+      sessionManager = piSdk.SessionManager.forkFrom(options.sessionFile, this.cwd, sessionDir);
     } else if (options.sessionFile !== undefined) {
-      sessionManager = SessionManager.open(options.sessionFile, sessionDir, this.cwd);
+      sessionManager = piSdk.SessionManager.open(options.sessionFile, sessionDir, this.cwd);
     } else {
-      sessionManager = SessionManager.create(this.cwd, sessionDir);
+      sessionManager = piSdk.SessionManager.create(this.cwd, sessionDir);
     }
     this._sessionId = sessionManager.getSessionId();
 
@@ -268,8 +262,8 @@ export class PiAcpSession {
       sessionStartEvent,
     }) => {
       const trusted = this.resolveProjectTrust(cwd, dir);
-      const settingsManager = SettingsManager.create(cwd, dir, { projectTrusted: trusted });
-      const services = await createAgentSessionServices({
+      const settingsManager = piSdk.SettingsManager.create(cwd, dir, { projectTrusted: trusted });
+      const services = await piSdk.createAgentSessionServices({
         cwd,
         agentDir: dir,
         settingsManager,
@@ -310,7 +304,7 @@ export class PiAcpSession {
         model = resolved.model;
         thinkingLevel = resolved.thinkingLevel;
       }
-      const created = await createAgentSessionFromServices({
+      const created = await piSdk.createAgentSessionFromServices({
         services,
         sessionManager: sm,
         sessionStartEvent,
@@ -324,7 +318,7 @@ export class PiAcpSession {
           type: "error" as const,
           message: `Failed to load extension "${path}": ${error}`,
         })),
-        ...(trusted || !hasTrustRequiringProjectResources(cwd)
+        ...(trusted || !piSdk.hasTrustRequiringProjectResources(cwd)
           ? []
           : [
               {
@@ -336,7 +330,7 @@ export class PiAcpSession {
       return { ...created, services, diagnostics };
     };
 
-    this.runtime = await createAgentSessionRuntime(createRuntime, {
+    this.runtime = await piSdk.createAgentSessionRuntime(createRuntime, {
       cwd: this.cwd,
       agentDir,
       sessionManager,
@@ -418,12 +412,12 @@ export class PiAcpSession {
 
   private resolveProjectTrust(cwd: string, agentDir: string): boolean {
     if (this.settings.trustProjects || this.trustedProjects.has(cwd)) return true;
-    if (!hasTrustRequiringProjectResources(cwd)) return true;
+    if (!piSdk.hasTrustRequiringProjectResources(cwd)) return true;
     try {
-      const store = new ProjectTrustStore(agentDir);
+      const store = new piSdk.ProjectTrustStore(agentDir);
       const decision = store.get(cwd);
       if (decision !== null) return decision;
-      const preference = SettingsManager.create(cwd, agentDir, {
+      const preference = piSdk.SettingsManager.create(cwd, agentDir, {
         projectTrusted: false,
       }).getDefaultProjectTrust();
       return preference === "always";
@@ -436,7 +430,7 @@ export class PiAcpSession {
   /** Persist a trust decision for the session cwd and reload resources. */
   async trustProject(remember: boolean): Promise<void> {
     if (remember) {
-      new ProjectTrustStore(this.runtime.services.agentDir).set(this.cwd, true);
+      new piSdk.ProjectTrustStore(this.runtime.services.agentDir).set(this.cwd, true);
     }
     this.trustedProjects.add(this.cwd);
     this.session.settingsManager.setProjectTrusted(true);

@@ -4,8 +4,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getPackageDir, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { errorMessage } from "../log.ts";
+import { piInstallation, piSdk } from "../pi/api.ts";
 import { modelValue } from "./config-options.ts";
 import type { PiAcpSession } from "./session.ts";
 import { VERSION } from "../version.ts";
@@ -35,7 +35,7 @@ export async function runBuiltinCommand(
       const usage = pi.getContextUsage();
       const stats = pi.getSessionStats();
       const rows = [
-        ["Adapter", `openma-pi-acp ${VERSION} (pi ${PI_VERSION})`],
+        ["Adapter", `openma-pi-acp ${VERSION} (pi ${piInstallation().version})`],
         ["Model", model !== undefined ? `${modelValue(model)} (${model.name})` : "(none)"],
         ["Thinking", pi.thinkingLevel],
         ["Auto-compaction", pi.autoCompactionEnabled ? "on" : "off"],
@@ -281,7 +281,7 @@ export async function runBuiltinCommand(
       };
     }
     case "changelog": {
-      const path = join(getPackageDir(), "CHANGELOG.md");
+      const path = join(piSdk.getPackageDir(), "CHANGELOG.md");
       if (!existsSync(path)) return { text: `pi changelog not found (${path})` };
       let text = readFileSync(path, "utf8");
       if (text.length > 20_000) text = `${text.slice(0, 20_000)}\n\n…(truncated)`;

@@ -9,6 +9,7 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { logError } from "./log.ts";
+import { loadPiHost } from "./pi/host.ts";
 import { serve } from "./server.ts";
 import { HELP_TEXT, resolveSettings, SettingsError } from "./settings.ts";
 import { terminalLogin } from "./terminal-login.ts";
@@ -23,10 +24,6 @@ export async function main(argv: string[]): Promise<void> {
     console.log(HELP_TEXT.trimEnd());
     return;
   }
-  if (argv.includes("--terminal-login")) {
-    process.exitCode = await terminalLogin(argv);
-    return;
-  }
 
   let settings;
   try {
@@ -39,6 +36,22 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     throw error;
+  }
+
+  // The Pi SDK is a peer dependency: the user picks the installation. Without
+  // one (or with a version outside the supported range) the adapter exits
+  // instead of running on a copy it resolved for itself.
+  try {
+    await loadPiHost({ explicit: settings.piPackageDir });
+  } catch (error: unknown) {
+    logError(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
+
+  if (argv.includes("--terminal-login")) {
+    process.exitCode = await terminalLogin(argv);
+    return;
   }
 
   const server = serve({ settings });
