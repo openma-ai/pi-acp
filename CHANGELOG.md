@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.9 — 2026-11-10
+
+- The Pi SDK is a peer dependency now: you choose which Pi version runs
+  behind the adapter (#13). `@earendil-works/pi-coding-agent` moves from
+  `dependencies` to `peerDependencies` with the supported range
+  `>=1.3.0 <2`; the direct `pi-ai` and `pi-agent-core` dependencies are
+  gone. The adapter loads the installation you installed — `--pi-package-dir`
+  / `PI_ACP_PI_PACKAGE_DIR`, the project it runs in, the `pi` executable on
+  `PATH`, or the global root next to it — and reports the loaded version as
+  `_meta.pi.piVersion`. Without a Pi installation, or with a version outside
+  the range, it exits non-zero instead of falling back to the copy npm
+  auto-installed as its peer dependency. **Breaking for install and startup:
+  install the Pi version you want.**
+
 ## 0.1.8 — 2026-10-17
 
 Stable release of 0.1.8-beta.0.
