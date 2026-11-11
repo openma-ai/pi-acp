@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  canonicalPath,
   isInside,
   isWindowsPath,
   normalizePath,
@@ -64,6 +65,16 @@ function writeManifest(dir: string, manifest: Record<string, unknown>): void {
   writeFileSync(join(dir, "package.json"), JSON.stringify(manifest));
 }
 
+/**
+ * Compare a resolved package directory against the directory the fixture
+ * built. The resolver follows symlinks — macOS maps `/var` to `/private/var`
+ * — so both sides are compared in canonical form.
+ */
+function expectSameDirectory(actual: string | undefined, expected: string): void {
+  expect(actual).toBeDefined();
+  expect(canonicalPath(actual ?? "")).toBe(canonicalPath(expected));
+}
+
 function context(overrides: Partial<ResolveContext> = {}): ResolveContext {
   return { cwd: tempRoot(), pathEntries: [], ...overrides };
 }
@@ -73,7 +84,7 @@ describe("pi package location", () => {
     const project = tempRoot();
     const packageDir = writePi(project);
     const result = resolvePiPackage(context({ cwd: project }));
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
     expect(result.selected?.source).toBe("project");
   });
 
@@ -84,28 +95,28 @@ describe("pi package location", () => {
     writePi(project);
     const result = resolvePiPackage(context({ cwd: project, explicit: explicitRoot }));
     expect(result.selected?.source).toBe("explicit");
-    expect(result.selected?.packageDir).toBe(explicit);
+    expectSameDirectory(result.selected?.packageDir, explicit);
   });
 
   it("accepts the package directory itself as an explicit location", () => {
     const root = tempRoot();
     const packageDir = writePi(root);
     const result = resolvePiPackage(context({ explicit: packageDir }));
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
   });
 
   it("accepts a node_modules root as an explicit location", () => {
     const root = tempRoot();
     const packageDir = writePi(root);
     const result = resolvePiPackage(context({ explicit: join(root, "node_modules") }));
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
   });
 
   it("accepts a project directory as an explicit location", () => {
     const root = tempRoot();
     const packageDir = writePi(root);
     const result = resolvePiPackage(context({ explicit: root }));
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
   });
 
   it("fails when an explicit location holds no Pi installation", () => {
@@ -121,7 +132,7 @@ describe("pi package location", () => {
     symlinkSync(join(packageDir, "dist", "index.js"), join(binDir, "pi"));
     const result = resolvePiPackage(context({ pathEntries: [binDir] }));
     expect(result.selected?.source).toBe("path");
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
   });
 
   it("keeps scanning PATH past a pi executable that belongs to another package", () => {
@@ -136,8 +147,23 @@ describe("pi package location", () => {
     mkdirSync(binDir, { recursive: true });
     symlinkSync(join(packageDir, "dist", "index.js"), join(binDir, "pi"));
     const result = resolvePiPackage(context({ pathEntries: [otherBin, binDir] }));
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
     expect(result.selected?.detail).toBe(join(binDir, "pi"));
+  });
+
+  it("resolves the package behind a pi executable through a symlinked directory", () => {
+    // macOS points the temporary directory at /private/var, so the resolver
+    // sees a different prefix than the one the fixture was written under.
+    const real = tempRoot();
+    const alias = join(real, "alias");
+    symlinkSync(real, alias, "junction");
+    const packageDir = writePi(alias);
+    const binDir = join(alias, "bin");
+    mkdirSync(binDir, { recursive: true });
+    symlinkSync(join(packageDir, "dist", "index.js"), join(binDir, "pi"));
+    const result = resolvePiPackage(context({ pathEntries: [binDir] }));
+    expect(result.selected?.source).toBe("path");
+    expectSameDirectory(result.selected?.packageDir, packageDir);
   });
 
   it("falls back to the global root next to this package", () => {
@@ -149,7 +175,7 @@ describe("pi package location", () => {
       context({ adapterPackageDir: adapterDir, adapterNodeModulesRoot: join(globalRoot, "node_modules") }),
     );
     expect(result.selected?.source).toBe("global");
-    expect(result.selected?.packageDir).toBe(packageDir);
+    expectSameDirectory(result.selected?.packageDir, packageDir);
   });
 
   it("rejects the copy npm auto-installed as this package's peer dependency", () => {
@@ -164,7 +190,7 @@ describe("pi package location", () => {
       }),
     );
     expect(result.selected).toBeUndefined();
-    expect(result.rejections[0]?.packageDir).toBe(peer);
+    expectSameDirectory(result.rejections[0]?.packageDir, peer);
     expect(result.rejections[0]?.reason).toMatch(/peer dependency/);
   });
 
@@ -177,7 +203,7 @@ describe("pi package location", () => {
       devDependencies: { [PI]: "^1.5.0" },
     });
     const result = resolvePiPackage(context({ cwd: project, adapterPeerPackageDir: peer }));
-    expect(result.selected?.packageDir).toBe(peer);
+    expectSameDirectory(result.selected?.packageDir, peer);
     expect(result.selected?.source).toBe("project");
   });
 
@@ -190,7 +216,7 @@ describe("pi package location", () => {
     mkdirSync(binDir, { recursive: true });
     symlinkSync(join(globalPi, "dist", "index.js"), join(binDir, "pi"));
     const result = resolvePiPackage(context({ cwd: project, pathEntries: [binDir] }));
-    expect(result.selected?.packageDir).toBe(projectPi);
+    expectSameDirectory(result.selected?.packageDir, projectPi);
   });
 
   it("reports nothing found when no candidate exists", () => {

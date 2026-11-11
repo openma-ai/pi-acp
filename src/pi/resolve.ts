@@ -98,6 +98,20 @@ export function samePath(a: string, b: string): boolean {
   return isWindowsPath(left) && left.toLowerCase() === right.toLowerCase();
 }
 
+/**
+ * The canonical form of a path: symlinks resolved, so macOS's `/var` →
+ * `/private/var` alias names the same directory as its canonical path.
+ * Paths that cannot be resolved (missing files, Windows-style paths on a
+ * POSIX runner) are returned unchanged.
+ */
+export function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 /** True when `child` is `parent` or lives inside it. */
 export function isInside(parent: string, child: string): boolean {
   const from = normalizePath(parent);
@@ -108,6 +122,16 @@ export function isInside(parent: string, child: string): boolean {
   return (
     to.startsWith(prefix) && (isWindowsPath(to) ? to.toLowerCase().startsWith(prefix.toLowerCase()) : true)
   );
+}
+
+/** Compare two directories by their canonical form. */
+function sameDirectory(a: string, b: string): boolean {
+  return samePath(canonicalPath(a), canonicalPath(b));
+}
+
+/** True when `child` is `parent` or lives inside it, comparing canonical forms. */
+function isInsideDirectory(parent: string, child: string): boolean {
+  return isInside(canonicalPath(parent), canonicalPath(child));
 }
 
 // ---------------------------------------------------------------------- //
@@ -268,7 +292,7 @@ export function resolvePiPackage(context: ResolveContext): ResolveResult {
 
   const project = findProjectPackage(context.cwd);
   if (project !== undefined) {
-    if (peer !== undefined && samePath(project, peer) && !projectDeclaresPi(project)) {
+    if (peer !== undefined && sameDirectory(project, peer) && !projectDeclaresPi(project)) {
       rejections.push({
         packageDir: project,
         source: "project",
@@ -287,7 +311,7 @@ export function resolvePiPackage(context: ResolveContext): ResolveResult {
     for (const executable of piExecutablesIn(entry)) {
       const packageDir = packageDirFromExecutable(executable);
       if (packageDir === undefined) continue;
-      if (peer !== undefined && samePath(packageDir, peer)) {
+      if (peer !== undefined && sameDirectory(packageDir, peer)) {
         rejections.push({
           packageDir,
           source: "path",
@@ -297,8 +321,8 @@ export function resolvePiPackage(context: ResolveContext): ResolveResult {
       }
       if (
         context.adapterPackageDir !== undefined &&
-        isInside(context.adapterPackageDir, packageDir) &&
-        !samePath(packageDir, context.adapterPackageDir)
+        isInsideDirectory(context.adapterPackageDir, packageDir) &&
+        !sameDirectory(packageDir, context.adapterPackageDir)
       ) {
         rejections.push({
           packageDir,
@@ -319,10 +343,10 @@ export function resolvePiPackage(context: ResolveContext): ResolveResult {
     const packageDir = join(root, ...PI_PACKAGE_NAME.split("/"));
     if (
       isPiPackageDir(packageDir) &&
-      (peer === undefined || !samePath(packageDir, peer)) &&
+      (peer === undefined || !sameDirectory(packageDir, peer)) &&
       (context.adapterPackageDir === undefined ||
-        !isInside(context.adapterPackageDir, packageDir) ||
-        samePath(packageDir, context.adapterPackageDir))
+        !isInsideDirectory(context.adapterPackageDir, packageDir) ||
+        sameDirectory(packageDir, context.adapterPackageDir))
     ) {
       return {
         selected: { source: "global", packageDir, detail: root },

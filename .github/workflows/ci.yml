@@ -42,9 +42,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # Pin the Pi version in the manifest, resolve a lockfile for it, and
+      # install from that lockfile. `npm install --no-save --no-package-lock`
+      # crashes on npm 10 ("Cannot read properties of null (reading
+      # 'edgesOut')") and would leave the tree out of sync with the lockfile.
       - name: Install the Pi version under test
-        run: npm install --no-save --no-package-lock "@earendil-works/pi-coding-agent@${{ matrix.pi }}"
+        run: |
+          npm pkg set "devDependencies.@earendil-works/pi-coding-agent=${{ matrix.pi }}"
+          npm install --package-lock-only
+          npm ci
       - name: Show the Pi family under test
         run: npm ls @earendil-works/pi-coding-agent @earendil-works/pi-codemode
       - run: npm run typecheck
