@@ -1,7 +1,7 @@
 /**
  * Register client-supplied ACP MCP servers on pi's MCP extension.
  *
- * pi 1.1.0 connects stdio and streamable HTTP itself (`createMcpExtension`),
+ * pi connects stdio and streamable HTTP itself (`createMcpExtension`),
  * names tools `mcp__<server>__<tool>`, and loads them through `tool_search`
  * when exposure is `deferred`. ACP servers use that exposure so a client sees
  * a real `tool_call` for the MCP tool after search, instead of every tool
@@ -15,13 +15,9 @@
  */
 import { join } from "node:path";
 import type { McpServer } from "@agentclientprotocol/sdk";
-import {
-  createMcpExtension,
-  createToolSearchExtension,
-  type InlineExtension,
-  type McpServerConfig,
-} from "@earendil-works/pi-coding-agent";
+import type { InlineExtension, McpServerConfig } from "@earendil-works/pi-coding-agent";
 import { errorMessage, logWarn } from "../log.ts";
+import { piSdk } from "../pi/api.ts";
 
 export interface PlannedMcpServer {
   name: string;
@@ -113,11 +109,11 @@ function configFor(server: McpServer): McpServerConfig | string {
  */
 export function piMcpExtensions(agentDir: string): InlineExtension[] {
   return [
-    { name: "tool-search", hidden: true, factory: createToolSearchExtension() },
+    { name: "tool-search", hidden: true, factory: piSdk.createToolSearchExtension() },
     {
       name: "mcp",
       hidden: true,
-      factory: createMcpExtension({
+      factory: piSdk.createMcpExtension({
         loadConfig: () => ({ servers: [], errors: [], autoEnableCodemode: true }),
         logPath: join(agentDir, "mcp.log"),
       }),

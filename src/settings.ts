@@ -9,6 +9,8 @@ export interface Settings {
   agentDir: string | undefined;
   /** `provider/model[:thinking]` override for new sessions. */
   model: string | undefined;
+  /** Explicit `@earendil-works/pi-coding-agent` installation to run on. */
+  piPackageDir: string | undefined;
   /** Emit a startup banner (pi version, resources) into new sessions. */
   quietStartup: boolean | undefined;
   /** Trust every project cwd (loads `.pi/` extensions) without a stored decision. */
@@ -30,6 +32,7 @@ Usage: openma-pi-acp [options]
 Options:
   --agent-dir <path>        pi config dir (default ~/.pi/agent; env PI_CODING_AGENT_DIR)
   --model <provider/id>     Model for new sessions (env PI_ACP_MODEL)
+  --pi-package-dir <path>   Pi installation to run on (env PI_ACP_PI_PACKAGE_DIR)
   --session-dir <path>      Session storage dir (env PI_ACP_SESSION_DIR)
   --trust-projects          Load project .pi/ resources everywhere (env PI_ACP_TRUST_PROJECTS=1)
   --no-delegation           Never use client fs/terminal delegation (env PI_ACP_DELEGATION=0)
@@ -47,6 +50,7 @@ function envFlag(name: string): boolean | undefined {
 export function resolveSettings(argv: readonly string[]): Settings {
   let agentDir = process.env["PI_CODING_AGENT_DIR"];
   let model = process.env["PI_ACP_MODEL"];
+  let piPackageDir = process.env["PI_ACP_PI_PACKAGE_DIR"];
   let sessionDir = process.env["PI_ACP_SESSION_DIR"];
   let trustProjects = envFlag("PI_ACP_TRUST_PROJECTS") ?? false;
   let delegation = envFlag("PI_ACP_DELEGATION") ?? true;
@@ -77,6 +81,9 @@ export function resolveSettings(argv: readonly string[]): Settings {
       case "--model":
         model = value();
         break;
+      case "--pi-package-dir":
+        piPackageDir = value();
+        break;
       case "--session-dir":
         sessionDir = value();
         break;
@@ -101,6 +108,12 @@ export function resolveSettings(argv: readonly string[]): Settings {
   return {
     agentDir: agentDir !== undefined ? (isAbsolute(agentDir) ? agentDir : resolve(agentDir)) : undefined,
     model,
+    piPackageDir:
+      piPackageDir !== undefined
+        ? isAbsolute(piPackageDir)
+          ? piPackageDir
+          : resolve(piPackageDir)
+        : undefined,
     quietStartup,
     trustProjects,
     delegation,

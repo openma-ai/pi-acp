@@ -6,9 +6,10 @@
  */
 
 import type { SessionInfo } from "@agentclientprotocol/sdk";
-import { SessionManager, type SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
+import type { SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { logDebug } from "../log.ts";
+import { piSdk } from "../pi/api.ts";
 import { persistedAdditionalDirectories } from "./workspace-scope.ts";
 
 export interface SessionIndexEntry {
@@ -80,8 +81,8 @@ export async function listSessions(options: {
 }): Promise<SessionIndexEntry[]> {
   const infos =
     options.cwd !== undefined
-      ? await SessionManager.list(options.cwd, options.sessionDir)
-      : await SessionManager.listAll(options.sessionDir);
+      ? await piSdk.SessionManager.list(options.cwd, options.sessionDir)
+      : await piSdk.SessionManager.listAll(options.sessionDir);
   return infos.map(toEntry).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
@@ -89,7 +90,7 @@ export async function findSession(
   sessionId: string,
   sessionDir?: string,
 ): Promise<SessionIndexEntry | undefined> {
-  const all = await SessionManager.listAll(sessionDir);
+  const all = await piSdk.SessionManager.listAll(sessionDir);
   const found = all.find((info) => info.id === sessionId);
   if (found === undefined) logDebug(`session ${sessionId} not found in pi's session store`);
   return found === undefined ? undefined : toEntry(found);

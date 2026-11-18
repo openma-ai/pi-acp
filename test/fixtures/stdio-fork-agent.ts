@@ -7,6 +7,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { serve } from "../../src/server.ts";
 import { resolveSettings } from "../../src/settings.ts";
+import { ensurePiSdk } from "../helpers/pi.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -43,6 +44,8 @@ const modelRuntime = await ModelRuntime.create({
 });
 modelRuntime.registerNativeProvider(faux.provider);
 await modelRuntime.refresh({ allowNetwork: false });
+
+await ensurePiSdk();
 
 const server = serve({
   settings: {

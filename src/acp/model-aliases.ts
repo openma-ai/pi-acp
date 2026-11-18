@@ -6,7 +6,8 @@
  * Resolution tries the current id when the old one is not in the catalog.
  */
 
-import { resolveCliModel, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { piSdk } from "../pi/api.ts";
 
 const THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -68,12 +69,12 @@ export function modelLookupCandidates(value: string): string[] {
 export function resolveAliasedCliModel(options: {
   cliModel: string;
   modelRuntime: ModelRuntime;
-}): ReturnType<typeof resolveCliModel> {
-  let last = resolveCliModel({ cliModel: options.cliModel, modelRuntime: options.modelRuntime });
+}): ReturnType<typeof piSdk.resolveCliModel> {
+  let last = piSdk.resolveCliModel({ cliModel: options.cliModel, modelRuntime: options.modelRuntime });
   if (last.model !== undefined) return last;
   for (const candidate of modelReferenceCandidates(options.cliModel)) {
     if (candidate === options.cliModel) continue;
-    const resolved = resolveCliModel({ cliModel: candidate, modelRuntime: options.modelRuntime });
+    const resolved = piSdk.resolveCliModel({ cliModel: candidate, modelRuntime: options.modelRuntime });
     if (resolved.model !== undefined) return resolved;
     last = resolved;
   }

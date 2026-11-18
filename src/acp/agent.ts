@@ -31,10 +31,11 @@ import {
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
-import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { errorMessage, logDebug, logWarn } from "../log.ts";
+import { piInstallation, piSdk } from "../pi/api.ts";
 import type { Settings } from "../settings.ts";
 import { AGENT_NAME, AGENT_TITLE, VERSION } from "../version.ts";
 import { AuthFlowCancelled, createAcpAuthInteraction } from "./auth-interaction.ts";
@@ -168,13 +169,13 @@ export class PiAcpAgent implements AcpAgent {
   }
 
   get agentDir(): string {
-    return this.settings.agentDir ?? getAgentDir();
+    return this.settings.agentDir ?? piSdk.getAgentDir();
   }
 
   private get sessionDir(): string | undefined {
     if (this.settings.sessionDir !== undefined) return this.settings.sessionDir;
     try {
-      return SettingsManager.create(process.cwd(), this.agentDir).getSessionDir();
+      return piSdk.SettingsManager.create(process.cwd(), this.agentDir).getSessionDir();
     } catch {
       return undefined;
     }
@@ -182,7 +183,7 @@ export class PiAcpAgent implements AcpAgent {
 
   private modelRuntime(): Promise<ModelRuntime> {
     if (!this.modelRuntimePromise) {
-      const pending = ModelRuntime.create({
+      const pending = piSdk.ModelRuntime.create({
         authPath: `${this.agentDir}/auth.json`,
         modelsPath: `${this.agentDir}/models.json`,
         signal: AbortSignal.timeout(15_000),
@@ -368,7 +369,11 @@ export class PiAcpAgent implements AcpAgent {
         auth: { logout: {} },
         _meta: mergeCapabilityMeta(
           {
-            ...piMeta({ version: VERSION, delegation: this.features.delegation }),
+            ...piMeta({
+              version: VERSION,
+              piVersion: piInstallation().version,
+              delegation: this.features.delegation,
+            }),
             // Presence announces that this agent pushes `_auth/status_update`.
             [AUTH_STATUS_META_KEY]: {},
           },
@@ -618,7 +623,7 @@ export class PiAcpAgent implements AcpAgent {
 
   private settingsDefaultProvider(): string | undefined {
     try {
-      return SettingsManager.create(process.cwd(), this.agentDir).getDefaultProvider();
+      return piSdk.SettingsManager.create(process.cwd(), this.agentDir).getDefaultProvider();
     } catch {
       return undefined;
     }

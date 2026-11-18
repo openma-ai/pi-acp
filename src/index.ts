@@ -8,5 +8,7 @@ export { buildConfigOptions, findModel, modelValue } from "./acp/config-options.
 export { BUILTIN_COMMANDS, availableCommandsFor, parseSlashCommand } from "./acp/commands.ts";
 export { buildAuthMethods, TERMINAL_AUTH_METHOD_ID } from "./acp/auth.ts";
 export { serve, stdioStream, type ServerHandle } from "./server.ts";
+export { loadPiHost, PI_SUPPORTED_RANGE, PiNotFoundError, PiVersionError } from "./pi/host.ts";
+export { piInstallation, piSdk, type PiApi, type PiInstallation } from "./pi/api.ts";
 export { resolveSettings, SettingsError, HELP_TEXT, type Settings } from "./settings.ts";
 export { VERSION, PACKAGE_NAME } from "./version.ts";

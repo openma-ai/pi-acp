@@ -21,11 +21,23 @@ in the editor can be `/resume`d in the terminal and vice versa.
 
 ## Install
 
-Requires Node.js **22.19 or newer** and the Pi **1.1.0** SDK family.
+Requires Node.js **22.19 or newer** and the Pi SDK
+(`@earendil-works/pi-coding-agent`) in the supported range **`>=1.3.0 <2`**.
+
+The Pi SDK is a **peer dependency**: you choose which Pi version runs behind
+the adapter. The adapter loads the installation you installed — sessions,
+extensions, and the credential store share one module identity with it — and
+exits with a clear error when no installation is found or when its version is
+outside the supported range. It never falls back to a copy it resolved for
+itself.
 
 ```bash
-npm install -g @earendil-works/pi-coding-agent   # pi itself
+# 1. install the Pi version you want
+npm install -g @earendil-works/pi-coding-agent@1.5.2   # pi itself
+
+# 2. install the adapter
 npm install -g @openma/pi-acp
+
 pi                                                # log in once (/login) if you have not
 ```
 
@@ -39,6 +51,62 @@ pi                                                # log in once (/login) if you 
 ```
 
 Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp"] }`.
+
+### Where the adapter finds Pi
+
+The first match wins:
+
+| Order | Source                                              | Typical layout                                                |
+| ----- | --------------------------------------------------- | ------------------------------------------------------------- |
+| 1     | `--pi-package-dir <path>` / `PI_ACP_PI_PACKAGE_DIR` | an installation you point at explicitly                       |
+| 2     | the project the adapter runs in                     | `npm install @earendil-works/pi-coding-agent` in that project |
+| 3     | the `pi` executable on `PATH`                       | `npm install -g @earendil-works/pi-coding-agent`              |
+| 4     | the npm global root next to the adapter             | both installed globally, side by side                         |
+
+`--pi-package-dir` accepts the package directory itself, a `node_modules`
+root, a project directory containing `node_modules`, or the path of a `pi`
+executable. It is exclusive: when it does not hold a Pi installation, the
+adapter exits instead of using another copy.
+
+The copy npm auto-installs as this package's peer dependency is **not** a
+candidate — it is a version the adapter picked, not one you chose. The adapter
+also refuses to run on a Pi version outside `>=1.3.0 <2`; it names the version
+it found and the range it supports, then exits non-zero.
+
+The version that was loaded is reported in the `initialize` response as
+`_meta.pi.piVersion` (next to `_meta.pi.version`, which stays the adapter
+version) — see [docs/metadata.md](docs/metadata.md).
+
+### Install layouts
+
+**Project install** — the Pi version is pinned by the project's manifest:
+
+```bash
+npm install @earendil-works/pi-coding-agent@1.5.2 @openma/pi-acp
+npx openma-pi-acp
+```
+
+**Global install** — the Pi version is the one on `PATH`:
+
+```bash
+npm install -g @earendil-works/pi-coding-agent@1.5.2
+npm install -g @openma/pi-acp
+openma-pi-acp
+```
+
+**`npx` / `npm exec`** — `npx @openma/pi-acp` runs the adapter from npm's
+execution cache, not from your project. npm installs the peer dependency into
+that cache; the adapter ignores it and uses the Pi you installed instead — the
+one in the project you run it from, or the one on `PATH`. Nothing extra is
+needed, but `--pi-package-dir` (or `PI_ACP_PI_PACKAGE_DIR`) removes the
+ambiguity when both a project copy and a global copy exist.
+
+**Explicit** — point the adapter at one installation:
+
+```bash
+PI_ACP_PI_PACKAGE_DIR=/opt/pi/node_modules/@earendil-works/pi-coding-agent openma-pi-acp
+openma-pi-acp --pi-package-dir /opt/pi
+```
 
 ## Features
 
@@ -76,7 +144,7 @@ Or without a global install: `{ "command": "npx", "args": ["-y", "@openma/pi-acp
   `/steering`, `/follow-up`, `/queue`, `/bash`, `/reload`, `/changelog`) plus pi prompt
   templates, `/skill:<name>`, and extension
   commands — all advertised through `available_commands_update`.
-- **MCP** — ACP `mcpServers` are registered on pi 1.1.0's MCP extension with deferred exposure. `tool_search` loads a tool before the model calls it; stdio and streamable HTTP stay supported. Connections close with the session. Legacy SSE is not advertised.
+- **MCP** — ACP `mcpServers` are registered on pi's MCP extension with deferred exposure. `tool_search` loads a tool before the model calls it; stdio and streamable HTTP stay supported. Connections close with the session. Legacy SSE is not advertised.
 - **Client delegation** — when the client advertises `fs.readTextFile` / `fs.writeTextFile`,
   pi's `read`/`edit`/`write` go through the editor (unsaved buffers, in-editor edits); with
   `terminal`, `bash` runs in a client-owned terminal. Disable with `--no-delegation`.
@@ -217,6 +285,7 @@ Flags win over environment variables, which win over defaults.
 | ------------------ | ----------------------- | ------------- | ------------------------------------------------------------- |
 | `--agent-dir`      | `PI_CODING_AGENT_DIR`   | `~/.pi/agent` | pi config directory                                           |
 | `--model`          | `PI_ACP_MODEL`          | pi default    | `provider/model[:thinking]` for new sessions                  |
+| `--pi-package-dir` | `PI_ACP_PI_PACKAGE_DIR` | auto-detected | Pi installation to run on                                     |
 | `--session-dir`    | `PI_ACP_SESSION_DIR`    | pi default    | Session storage directory                                     |
 | `--trust-projects` | `PI_ACP_TRUST_PROJECTS` | off           | Load `.pi/` project resources without a stored trust decision |
 | `--no-delegation`  | `PI_ACP_DELEGATION=0`   | on            | Never use client fs/terminal delegation                       |
@@ -236,6 +305,9 @@ ACP client (Zed, Backchat, …)
 openma-pi-acp
    ├─ src/bin.ts              CLI, terminal-login, process lifetime
    ├─ src/server.ts           AgentSideConnection over stdio (or an injected stream)
+   ├─ src/pi/
+   │    ├─ resolve.ts         where the user's Pi installation is (explicit, project, PATH, global)
+   │    └─ host.ts            load that installation, check its version, expose its API
    └─ src/acp/
         ├─ agent.ts           ACP methods: initialize, auth, sessions, prompt, cancel, options, ext methods
         ├─ session.ts         one ACP session ↔ one pi AgentSessionRuntime (tools, extensions, lifecycle)
@@ -248,7 +320,7 @@ openma-pi-acp
         ├─ mcp.ts             ACP mcpServers → pi's MCP extension (deferred tools)
         └─ extension-events.ts  pi.events → extension_event
    ▼
-@earendil-works/pi-coding-agent (sessions, models, tools, extensions, skills, compaction, …)
+@earendil-works/pi-coding-agent — the user's installation (sessions, models, tools, extensions, skills, compaction, …)
 ```
 
 `docs/metadata.md` is the registry of every `_meta` field the adapter reads or emits.
@@ -261,6 +333,14 @@ npm run typecheck
 npm test            # faux-model sessions and local MCP servers; no provider requests
 npm run build
 node dist/bin.js --help
+```
+
+The Pi SDK is a dev dependency here, so the suite runs against the version in
+`node_modules`. To try another supported version:
+
+```bash
+npm install --no-save --no-package-lock @earendil-works/pi-coding-agent@1.3.0
+npm test
 ```
 
 ## License

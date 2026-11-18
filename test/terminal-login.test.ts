@@ -7,9 +7,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runTerminalLogin, terminalLogin } from "../src/terminal-login.ts";
 import { flowProvider, keyableProvider } from "./helpers/auth-providers.ts";
+import { ensurePiSdk } from "./helpers/pi.ts";
+
+beforeAll(async () => {
+  await ensurePiSdk();
+});
 
 const mocks = vi.hoisted(() => ({
   actualResolveSettings: undefined as undefined | typeof import("../src/settings.ts").resolveSettings,

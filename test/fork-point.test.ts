@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildContextEntries, SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildReplay } from "../src/acp/history.ts";
+import { ensurePiSdk } from "./helpers/pi.ts";
 import {
   ACP_INCLUSIVE_FORK_CAPABILITY,
   acpInclusiveForkCapabilityMeta,
@@ -282,6 +283,10 @@ describe("capability meta", () => {
       jetbrains: { air: { fork: { version: 1, inclusive: true } } },
     });
   });
+});
+
+beforeAll(async () => {
+  await ensurePiSdk();
 });
 
 describe("branchInclusiveSession", () => {

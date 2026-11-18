@@ -9,17 +9,10 @@
  */
 
 import type { AgentSideConnection, ClientCapabilities } from "@agentclientprotocol/sdk";
-import {
-  detectSupportedImageMimeTypeFromFile,
-  getShellConfig,
-  createBashToolDefinition,
-  createEditToolDefinition,
-  createReadToolDefinition,
-  createWriteToolDefinition,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFile, access, mkdir } from "node:fs/promises";
 import { logDebug } from "../log.ts";
+import { piSdk } from "../pi/api.ts";
 
 export interface DelegationCapabilities {
   readTextFile: boolean;
@@ -62,7 +55,7 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
   const tools: ToolDefinition[] = [];
 
   const readViaClient = async (absolutePath: string): Promise<Buffer> => {
-    if (!isTextLike(absolutePath) || (await detectSupportedImageMimeTypeFromFile(absolutePath)))
+    if (!isTextLike(absolutePath) || (await piSdk.detectSupportedImageMimeTypeFromFile(absolutePath)))
       return readFile(absolutePath);
     try {
       const response = await conn.readTextFile({ sessionId, path: absolutePath });
@@ -78,19 +71,19 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
 
   if (caps.readTextFile) {
     tools.push(
-      createReadToolDefinition(cwd, {
+      piSdk.createReadToolDefinition(cwd, {
         autoResizeImages: options.autoResizeImages,
         operations: {
           readFile: readViaClient,
           access: (path) => access(path),
-          detectImageMimeType: detectSupportedImageMimeTypeFromFile,
+          detectImageMimeType: piSdk.detectSupportedImageMimeTypeFromFile,
         },
       }) as unknown as ToolDefinition,
     );
   }
   if (caps.writeTextFile) {
     tools.push(
-      createEditToolDefinition(cwd, {
+      piSdk.createEditToolDefinition(cwd, {
         operations: {
           readFile: caps.readTextFile ? readViaClient : readFile,
           writeFile: writeViaClient,
@@ -99,7 +92,7 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
       }) as unknown as ToolDefinition,
     );
     tools.push(
-      createWriteToolDefinition(cwd, {
+      piSdk.createWriteToolDefinition(cwd, {
         operations: {
           writeFile: writeViaClient,
           mkdir: (dir) => mkdir(dir, { recursive: true }).then(() => undefined),
@@ -109,7 +102,7 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
   }
 
   if (caps.terminal) {
-    const bash = createBashToolDefinition(cwd, {
+    const bash = piSdk.createBashToolDefinition(cwd, {
       shellPath: options.shellPath,
       commandPrefix: options.commandPrefix,
     }) as unknown as ToolDefinition;
@@ -121,7 +114,7 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
       execute: async (toolCallId, params, signal, onUpdate, ctx) => {
         signal?.throwIfAborted();
         const input = params as { command: string; timeout?: number };
-        const shell = getShellConfig(options.shellPath);
+        const shell = piSdk.getShellConfig(options.shellPath);
         // ACP terminals cannot send stdin to legacy WSL bash; retain pi execution there.
         if (shell.commandTransport === "stdin")
           return bash.execute(toolCallId, params, signal, onUpdate, ctx);

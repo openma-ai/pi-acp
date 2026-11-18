@@ -6,9 +6,16 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { piInstallation } from "../src/pi/api.ts";
+import { VERSION } from "../src/version.ts";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall, Harness } from "./helpers/harness.ts";
 
 let harness: Harness | undefined;
+
+/** The version of the Pi installation the adapter loaded. */
+function installedPiVersion(): string {
+  return piInstallation().version;
+}
 
 afterEach(async () => {
   await harness?.close();
@@ -36,6 +43,18 @@ describe("initialize", () => {
     const ids = (response.authMethods ?? []).map((m) => m.id);
     expect(ids).not.toContain("pi-terminal-login");
     expect(ids).toContain("api-key:faux");
+  });
+
+  it("reports the adapter version and the loaded Pi version separately", async () => {
+    harness = await Harness.create();
+    const response = await harness.initialize();
+    const meta = response.agentCapabilities?._meta as
+      { pi?: { version?: string; piVersion?: string } } | undefined;
+    // The adapter version stays the adapter version.
+    expect(meta?.pi?.version).toBe(VERSION);
+    // The loaded Pi version is reported next to it.
+    expect(meta?.pi?.piVersion).toBe(installedPiVersion());
+    expect(meta?.pi?.piVersion).not.toBe(meta?.pi?.version);
   });
 });
 

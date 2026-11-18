@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createTappedEventBus,
   describeExtensionEvent,
@@ -6,6 +6,11 @@ import {
   inferPhase,
   sanitizePayload,
 } from "../src/acp/extension-events.ts";
+import { ensurePiSdk } from "./helpers/pi.ts";
+
+beforeAll(async () => {
+  await ensurePiSdk();
+});
 
 describe("extension event inference", () => {
   it("reads a lifecycle phase from channel naming conventions", () => {

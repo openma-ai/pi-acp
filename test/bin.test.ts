@@ -8,6 +8,17 @@ const serve = vi.hoisted(() =>
 );
 vi.mock("../src/server.ts", () => ({ serve }));
 
+const loadPiHost = vi.hoisted(() =>
+  vi.fn(async (_options: { explicit?: string }) => ({
+    version: "1.5.2",
+    packageDir: "/tmp/pi",
+    source: "project",
+    detail: "/tmp",
+    api: {},
+  })),
+);
+vi.mock("../src/pi/host.ts", () => ({ loadPiHost }));
+
 vi.mock("../src/settings.ts", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/settings.ts")>();
   return { ...original, resolveSettings: vi.fn(original.resolveSettings) };
@@ -30,6 +41,14 @@ describe("bin dispatch", () => {
     vi.restoreAllMocks();
     serve.mockReset();
     terminalLogin.mockReset();
+    loadPiHost.mockReset();
+    loadPiHost.mockResolvedValue({
+      version: "1.5.2",
+      packageDir: "/tmp/pi",
+      source: "project",
+      detail: "/tmp",
+      api: {},
+    });
     vi.mocked(resolveSettings).mockReset();
   });
 
@@ -70,6 +89,22 @@ describe("bin dispatch", () => {
       throw new Error("boom");
     });
     await expect(main([])).rejects.toThrow("boom");
+    expect(serve).not.toHaveBeenCalled();
+  });
+
+  it("exits 1 with a clear error when no Pi installation is found", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    loadPiHost.mockRejectedValueOnce(new Error("openma-pi-acp could not find a Pi installation."));
+    await main([]);
+    expect(process.exitCode).toBe(1);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("could not find a Pi installation"));
+    expect(serve).not.toHaveBeenCalled();
+  });
+
+  it("passes the explicit Pi package dir to the loader", async () => {
+    terminalLogin.mockResolvedValue(0);
+    await main(["--pi-package-dir", "/opt/pi", "--terminal-login"]);
+    expect(loadPiHost).toHaveBeenCalledWith({ explicit: "/opt/pi" });
     expect(serve).not.toHaveBeenCalled();
   });
 

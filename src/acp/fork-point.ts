@@ -9,8 +9,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { SessionManager, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry, SessionManager, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { piSdk } from "../pi/api.ts";
 import { assistantAcpMessageId } from "./message-id.ts";
 
 export const FORK_UNSUPPORTED_VERSION = "Unsupported jetbrains.air.fork version";
@@ -233,7 +234,7 @@ export function branchInclusiveSession(
   sessionDir: string | undefined,
   entryId: string,
 ): string {
-  const opened = SessionManager.open(sourceFile, sessionDir, cwd);
+  const opened = piSdk.SessionManager.open(sourceFile, sessionDir, cwd);
   return cutOpenedSession(opened, entryId);
 }
 
@@ -247,7 +248,7 @@ export function forkInclusiveSession(
   sessionDir: string | undefined,
   request: InclusiveForkRequest,
 ): string | undefined {
-  const opened = SessionManager.open(sourceFile, sessionDir, cwd);
+  const opened = piSdk.SessionManager.open(sourceFile, sessionDir, cwd);
   const target = locateForkAssistant(opened.buildContextEntries(), opened.getEntries(), request);
   if (target === undefined) return undefined;
   return cutOpenedSession(opened, target.id);
