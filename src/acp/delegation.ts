@@ -109,6 +109,8 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
     // Reuse pi's schema/description; replace execution with a client terminal.
     tools.push({
       ...bash,
+      // ACP clients can cap concurrent terminals per session.
+      executionMode: "sequential",
       renderCall: undefined,
       renderResult: undefined,
       execute: async (toolCallId, params, signal, onUpdate, ctx) => {
@@ -174,7 +176,7 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
           clearInterval(poll);
           if (timer !== undefined) clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
-          void handle.release().catch(() => undefined);
+          await handle.release().catch(() => undefined);
         }
       },
     });
