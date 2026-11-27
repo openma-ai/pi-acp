@@ -109,6 +109,13 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
     // Reuse pi's schema/description; replace execution with a client terminal.
     tools.push({
       ...bash,
+      // ACP clients may cap live terminals per session (one at a time is
+      // common). pi runs the tool calls of one assistant message in parallel
+      // by default, so two sibling `bash` calls would ask the client for two
+      // terminals at once and the second one would be refused. Marking this
+      // tool sequential makes pi run that batch one call at a time, so only
+      // one client terminal is open per session.
+      executionMode: "sequential",
       renderCall: undefined,
       renderResult: undefined,
       execute: async (toolCallId, params, signal, onUpdate, ctx) => {
@@ -174,7 +181,11 @@ export function createDelegatedTools(options: DelegationOptions): ToolDefinition
           clearInterval(poll);
           if (timer !== undefined) clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
-          void handle.release().catch(() => undefined);
+          // Await the release: the client frees the terminal slot when
+          // `terminal/release` lands, so the next delegated shell call must not
+          // ask for a terminal before that happened. A failed release must not
+          // fail the tool call.
+          await handle.release().catch(() => undefined);
         }
       },
     });

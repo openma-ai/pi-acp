@@ -57,6 +57,11 @@ export interface HarnessOptions {
   ) => CreateElicitationResponse | Promise<CreateElicitationResponse>;
   readTextFile?: Client["readTextFile"];
   writeTextFile?: Client["writeTextFile"];
+  /** Client-side terminal methods; wire them up to exercise delegated shell calls. */
+  terminal?: Pick<
+    Client,
+    "createTerminal" | "terminalOutput" | "waitForTerminalExit" | "releaseTerminal" | "killTerminal"
+  >;
   /** Extra native providers registered on the model runtime before connecting. */
   providers?: Provider[];
   /** Faux token rate. Set it when a test must observe a chunk before the turn ends. */
@@ -176,6 +181,7 @@ export class Harness {
         ...(harness.options.writeTextFile !== undefined
           ? { writeTextFile: harness.options.writeTextFile }
           : {}),
+        ...(harness.options.terminal !== undefined ? { ...harness.options.terminal } : {}),
       }),
       clientStream,
     );
